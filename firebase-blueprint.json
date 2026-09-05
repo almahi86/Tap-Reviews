@@ -1,0 +1,99 @@
+{
+  "entities": {
+    "Business": {
+      "title": "Business",
+      "description": "Business profile representing the micro-SaaS subscriber and their store configuration.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the business owner."
+        },
+        "businessName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Commercial name of the store or location."
+        },
+        "googleMapsReviewUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Direct Google Maps write-a-review destination URL."
+        },
+        "subscriptionStatus": {
+          "type": "string",
+          "enum": ["active", "inactive", "trialing", "canceled"],
+          "description": "Current Stripe billing subscription status."
+        },
+        "stripeCustomerId": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Optional Stripe customer ID."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when business record was initialized."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when business profile was last modified."
+        }
+      },
+      "required": ["ownerUid", "businessName", "googleMapsReviewUrl", "subscriptionStatus"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "Private intercepted negative feedback submitted by customers after tapping NFC.",
+      "type": "object",
+      "properties": {
+        "businessId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "ID of the business receiving the feedback."
+        },
+        "rating": {
+          "type": "string",
+          "enum": ["dislike", "like"],
+          "description": "Outcome of the customer rating tap."
+        },
+        "customerNote": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Customer description of what went wrong."
+        },
+        "customerContact": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Optional phone or email provided for follow up."
+        },
+        "customerName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Optional customer identifier or table."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["new", "reviewed", "resolved"],
+          "description": "Internal triage status on the dashboard."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the feedback was recorded."
+        }
+      },
+      "required": ["businessId", "rating", "customerNote", "status"]
+    }
+  },
+  "firestore": {
+    "/businesses/{businessId}": {
+      "schema": "Business",
+      "description": "Stores business profile, subscription status, and Google Maps URL."
+    },
+    "/businesses/{businessId}/feedbacks/{feedbackId}": {
+      "schema": "Feedback",
+      "description": "Private subcollection of customer feedback documents visible only to the business owner."
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "TapShield - NFC Customer Feedback Recovery",
+  "description": "Micro-SaaS platform that intercepts negative reviews from in-store NFC taps and redirects happy customers to Google Maps reviews.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

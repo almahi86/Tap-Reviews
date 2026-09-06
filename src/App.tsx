@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { NfcRatingPage } from "./components/NfcRatingPage";
 import { GatedDashboard } from "./components/GatedDashboard";
 import { LandingPage } from "./components/LandingPage";
+import { DashboardPreviewSection } from "./components/DashboardPreviewSection";
 import { EmailVerificationScreen } from "./components/EmailVerificationScreen";
 import { AuthModal } from "./components/AuthModal";
 import { SubscriptionModal } from "./components/SubscriptionModal";
@@ -141,7 +142,7 @@ export default function App() {
         uid: session.uid,
         email: session.email,
         displayName: session.displayName,
-        emailVerified: true,
+        emailVerified: session.emailVerified ?? false,
         isDemo: false,
       };
       setCurrentUser(restoredUser);
@@ -166,10 +167,9 @@ export default function App() {
 
           const isGoogleUser =
             user.providerData?.some((p) => p.providerId === "google.com") ||
-            user.uid.startsWith("google_") ||
-            Boolean(session?.email);
+            user.uid.startsWith("google_");
 
-          let verified = isGoogleUser || user.emailVerified;
+          let verified = isGoogleUser || Boolean(user.emailVerified);
           // Check backend verification store if not verified yet
           if (!verified && user.email) {
             try {
@@ -202,7 +202,7 @@ export default function App() {
               uid: session.uid,
               email: session.email,
               displayName: session.displayName,
-              emailVerified: true,
+              emailVerified: session.emailVerified ?? false,
               isDemo: false,
             };
             setCurrentUser(restoredUser);
@@ -342,7 +342,7 @@ export default function App() {
             }`}
           >
             <Smartphone className="w-3.5 h-3.5" />
-            <span>Customer View{currentBusinessName ? ` • ${currentBusinessName}` : ""}</span>
+            <span>Customer View</span>
           </button>
         </div>
 
@@ -416,31 +416,27 @@ export default function App() {
         {currentView === "dashboard" && (
           // ACTIVE ROUTING GUARD
           !currentUser ? (
-            <div className="min-h-[80vh] flex items-center justify-center p-4">
-              <div className="bg-[#141414] border border-white/10 rounded-2xl p-8 max-w-md w-full text-center space-y-5">
-                <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto">
-                  <Lock className="w-6 h-6" />
-                </div>
-                <h2 className="text-xl font-black uppercase text-white">Sign In Required</h2>
-                <p className="text-xs text-stone-400 leading-relaxed">
-                  Sign in to view customer feedback, check analytics, and update your store's Google review URL.
-                </p>
-                <button
-                  id="btn-login-prompt"
-                  onClick={() => setIsAuthModalOpen(true)}
-                  className="w-full py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider transition cursor-pointer shadow-lg shadow-emerald-500/10"
-                >
-                  Sign In / Create Account
-                </button>
-              </div>
-            </div>
+            <DashboardPreviewSection
+              onOpenAuthModal={() => setIsAuthModalOpen(true)}
+              onExploreDemo={() => {
+                const demoUser: AuthUserProfile = {
+                  uid: "demo-cafe",
+                  email: "demo@artisanbrews.com",
+                  displayName: "Artisan Brews (Demo)",
+                  emailVerified: true,
+                  isDemo: true,
+                };
+                setCurrentUser(demoUser);
+                setActiveBusinessId("demo-cafe");
+              }}
+            />
           ) : !currentUser.emailVerified ? (
             // User is unverified! ACTIVELY GUARD: display EmailVerificationScreen
             <EmailVerificationScreen
               currentUser={currentUser}
-              initialPreviewCode={activePreviewCode}
               onVerified={(verifiedUser) => {
                 setCurrentUser(verifiedUser);
+                saveAuthSession(verifiedUser, true);
                 setActivePreviewCode(undefined);
               }}
               onSignOut={handleSignOut}
@@ -541,8 +537,8 @@ export default function App() {
 
           setIsSubscribed(hasActiveSubscription);
 
-          // If not paid, user must pay first: trigger the subscription payment modal
-          if (!hasActiveSubscription) {
+          // If not paid and verified, trigger the subscription payment modal
+          if (!hasActiveSubscription && user.emailVerified) {
             setIsSubscriptionModalOpen(true);
           }
 

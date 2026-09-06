@@ -38,6 +38,7 @@ import {
 import type { Business, FeedbackItem, AuthUserProfile } from "../types";
 import { WeeklyAnalyticsChart } from "./WeeklyAnalyticsChart";
 import { StripeEmbeddedCheckoutModal } from "./StripeEmbeddedCheckout";
+import { EmailVerificationScreen } from "./EmailVerificationScreen";
 
 interface GatedDashboardProps {
   currentUser: AuthUserProfile | null;
@@ -54,6 +55,17 @@ export function GatedDashboard({
   onBackToLanding,
   onOpenAuthModal,
 }: GatedDashboardProps) {
+  // Guard access: unverified users must verify email before accessing dashboard
+  if (currentUser && !currentUser.emailVerified) {
+    return (
+      <EmailVerificationScreen
+        currentUser={currentUser}
+        onVerified={(verifiedUser) => onUserAuthChange(verifiedUser)}
+        onSignOut={() => onUserAuthChange(null)}
+      />
+    );
+  }
+
   const [businessId, setBusinessId] = useState<string>("demo-cafe");
   const [business, setBusiness] = useState<Business | null>(null);
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
@@ -653,13 +665,13 @@ export function GatedDashboard({
 
               <div className="bg-[#161616] p-6 border-l-4 border-white border border-white/5">
                 <div className="text-3xl font-black mb-1 text-white tracking-tight uppercase">
-                  {isFirebaseConfigured ? "Firestore" : "Active Sync"}
+                  Cloud Sync
                 </div>
                 <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
                   Database Storage
                 </div>
                 <p className="text-[10px] text-stone-400 mt-2 font-mono uppercase tracking-wider">
-                  Stored in Firestore
+                  Real-Time Encrypted Storage
                 </p>
               </div>
             </div>

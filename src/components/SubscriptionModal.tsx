@@ -122,17 +122,19 @@ export function SubscriptionModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-xl bg-[#121212] border border-white/10 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-5 text-white my-auto max-h-[92vh] flex flex-col overflow-hidden">
+      <div className="relative w-full max-w-xl bg-[#121212] border border-white/10 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4 text-white my-auto max-h-[92vh] flex flex-col overflow-hidden">
         {/* Close Button */}
         <button
           id="btn-close-subscription-modal"
+          type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 p-2 text-stone-400 hover:text-white rounded-lg hover:bg-white/5 transition cursor-pointer z-10"
+          aria-label="Close"
+          className="absolute top-4 right-4 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-stone-200 hover:text-white flex items-center justify-center transition cursor-pointer z-20 shadow"
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4" />
         </button>
 
-        <div className="overflow-y-auto pr-0.5 space-y-5">
+        <div className="overflow-y-auto pr-1 space-y-4 [scrollbar-width:thin]">
 
         {/* Modal Header */}
         <div className="space-y-1.5 pr-8">

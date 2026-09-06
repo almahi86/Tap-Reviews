@@ -15,6 +15,7 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
   updateProfile,
+  sendEmailVerification,
   setPersistence,
   browserLocalPersistence,
   browserSessionPersistence,
@@ -78,6 +79,7 @@ export interface StoredAuthSession {
   uid: string;
   email?: string | null;
   displayName?: string | null;
+  emailVerified?: boolean;
   savedAt: number;
   expiresAt: number;
   staySignedIn: boolean;
@@ -88,7 +90,7 @@ export interface StoredAuthSession {
  * If staySignedIn is true, persists for 7 days (1 week).
  */
 export function saveAuthSession(
-  user: { uid: string; email?: string | null; displayName?: string | null },
+  user: { uid: string; email?: string | null; displayName?: string | null; emailVerified?: boolean },
   staySignedIn: boolean
 ): void {
   try {
@@ -97,6 +99,7 @@ export function saveAuthSession(
       uid: user.uid,
       email: user.email,
       displayName: user.displayName,
+      emailVerified: user.emailVerified ?? false,
       savedAt: Date.now(),
       expiresAt: Date.now() + duration,
       staySignedIn,
@@ -161,7 +164,7 @@ export async function syncVerifiedUserWithServer(user: {
 
 /**
  * 1. Sign Up with Email and Password
- * Registers user in Firebase Auth and establishes active authenticated session.
+ * Registers user in Firebase Auth and immediately sends native verification link via sendEmailVerification(fbUser).
  */
 export async function signUpWithEmail(
   email: string,
@@ -188,11 +191,19 @@ export async function signUpWithEmail(
       await updateProfile(fbUser, { displayName });
     }
 
+    // MANDATORY (Requirement 1): Immediately call Firebase's sendEmailVerification(user)
+    try {
+      await sendEmailVerification(fbUser);
+      console.log("Firebase native verification email sent to:", fbUser.email);
+    } catch (verifyErr) {
+      console.warn("sendEmailVerification warning:", verifyErr);
+    }
+
     const userProfile: AuthUserProfile = {
       uid: fbUser.uid,
       email: fbUser.email,
       displayName: displayName || fbUser.displayName,
-      emailVerified: true, // Mark verified so user seamlessly accesses dashboard
+      emailVerified: Boolean(fbUser.emailVerified), // Initially false for newly registered accounts
       isDemo: false,
     };
 
@@ -209,7 +220,7 @@ export async function signUpWithEmail(
     uid: `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
     email: cleanEmail,
     displayName: displayName || cleanEmail.split("@")[0],
-    emailVerified: true,
+    emailVerified: false,
     isDemo: false,
   };
   saveAuthSession(fallbackProfile, staySignedIn);
@@ -219,7 +230,7 @@ export async function signUpWithEmail(
 
 /**
  * 2. Sign In with Email and Password
- * Validates credentials and returns AuthUserProfile with emailVerified state.
+ * Validates credentials and returns AuthUserProfile with accurate emailVerified state from Firebase.
  */
 export async function signInWithEmail(
   email: string,
@@ -241,11 +252,18 @@ export async function signInWithEmail(
     const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
     const fbUser = credential.user;
 
+    // Reload user to retrieve latest emailVerified status from Firebase servers
+    try {
+      await fbUser.reload();
+    } catch (reloadErr) {
+      console.warn("User reload warning on sign in:", reloadErr);
+    }
+
     const userProfile: AuthUserProfile = {
       uid: fbUser.uid,
       email: fbUser.email,
       displayName: fbUser.displayName,
-      emailVerified: true,
+      emailVerified: Boolean(fbUser.emailVerified),
       isDemo: false,
     };
 
@@ -259,12 +277,35 @@ export async function signInWithEmail(
     uid: `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
     email: cleanEmail,
     displayName: cleanEmail.split("@")[0],
-    emailVerified: true,
+    emailVerified: false,
     isDemo: false,
   };
   saveAuthSession(fallbackProfile, staySignedIn);
   await syncVerifiedUserWithServer(fallbackProfile);
   return fallbackProfile;
+}
+
+/**
+ * Send / Resend native Firebase verification email to current user
+ */
+export async function sendNativeEmailVerification(): Promise<void> {
+  if (isFirebaseConfigured && auth?.currentUser) {
+    await sendEmailVerification(auth.currentUser);
+    console.log("Firebase native verification email resent to:", auth.currentUser.email);
+    return;
+  }
+  throw new Error("No authenticated user found. Please sign in again.");
+}
+
+/**
+ * Reload the current Firebase user and check if email is now verified
+ */
+export async function reloadAndCheckEmailVerified(): Promise<boolean> {
+  if (isFirebaseConfigured && auth?.currentUser) {
+    await auth.currentUser.reload();
+    return Boolean(auth.currentUser.emailVerified);
+  }
+  return false;
 }
 
 /**
@@ -536,3 +577,88 @@ export async function triggerStripeSubscriptionCheckout(params: {
   const result = await createEmbeddedCheckoutSession(params);
   return result.clientSecret;
 }
+
+/**
+ * User-friendly authentication error sanitizer.
+ * Guarantees NO technical Firebase or backend jargon is exposed to the user.
+ * Translates technical error codes into user-friendly messages.
+ */
+export function formatAuthError(err: any): string {
+  if (!err) return "Incorrect email or password. Please try again.";
+
+  const code = (err?.code || "").toLowerCase();
+  const rawMessage = (err?.message || (typeof err === "string" ? err : "")).toString();
+  const normalized = (code + " " + rawMessage).toLowerCase();
+
+  // Invalid credentials / wrong password / user not found
+  if (
+    normalized.includes("invalid-credential") ||
+    normalized.includes("wrong-password") ||
+    normalized.includes("user-not-found") ||
+    normalized.includes("invalid-login-credentials")
+  ) {
+    return "Incorrect email or password. Please check your details and try again.";
+  }
+
+  // Account already exists
+  if (normalized.includes("email-already-in-use")) {
+    return "An account with this email address already exists. Please sign in instead.";
+  }
+
+  // Weak password
+  if (normalized.includes("weak-password")) {
+    return "Password is too weak. Please use at least 6 characters.";
+  }
+
+  // Invalid email format
+  if (normalized.includes("invalid-email")) {
+    return "Please enter a valid email address.";
+  }
+
+  // Rate limiting / too many requests
+  if (normalized.includes("too-many-requests")) {
+    return "Too many failed attempts. Please wait a moment before trying again.";
+  }
+
+  // Network connection error
+  if (normalized.includes("network-request-failed") || normalized.includes("network error")) {
+    return "Network connection issue. Please check your internet connection and try again.";
+  }
+
+  // User disabled
+  if (normalized.includes("user-disabled")) {
+    return "This account has been disabled. Please contact customer support.";
+  }
+
+  // Popup closed
+  if (normalized.includes("popup-closed-by-user")) {
+    return "Sign-in was cancelled. Please try again.";
+  }
+
+  // Expired verification link
+  if (normalized.includes("expired-action-code")) {
+    return "This verification link has expired. Please request a fresh one.";
+  }
+
+  // Invalid verification code / link
+  if (normalized.includes("invalid-action-code")) {
+    return "This verification link is invalid or has already been used.";
+  }
+
+  // Catch any remaining technical errors mentioning firebase or auth code syntax
+  if (
+    normalized.includes("firebase") ||
+    normalized.includes("auth/") ||
+    normalized.includes("error (")
+  ) {
+    return "Incorrect email or password. Please check your details and try again.";
+  }
+
+  // If there's a clean human message without internal names, use it
+  if (rawMessage && !rawMessage.toLowerCase().includes("firebase")) {
+    return rawMessage;
+  }
+
+  return "Incorrect email or password. Please check your details and try again.";
+}
+

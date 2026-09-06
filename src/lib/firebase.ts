@@ -336,7 +336,7 @@ export async function updateFeedbackItemStatus(
 // Authentication Helpers
 export async function signInWithGoogle(): Promise<AuthUserProfile> {
   if (!auth) {
-    throw new Error("Firebase Auth is not initialized. Use Demo Sign In or configure Firebase.");
+    throw new Error("Authentication service is temporarily unavailable. Please try again later.");
   }
   const provider = new GoogleAuthProvider();
   const result = await signInWithPopup(auth, provider);

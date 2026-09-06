@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 import { X, Mail, Lock, AlertCircle, ArrowRight, Clock, Store } from "lucide-react";
-import { signInWithGoogle, signInWithEmail, signUpWithEmail } from "../lib/auth-service";
+import {
+  signInWithGoogle,
+  signInWithEmail,
+  signUpWithEmail,
+  formatAuthError,
+} from "../lib/auth-service";
 import type { AuthUserProfile } from "../types";
 
 interface AuthModalProps {
@@ -59,7 +64,7 @@ export function AuthModal({
         onClose();
       }
     } catch (err: any) {
-      setError(err?.message || "Authentication failed. Please check your credentials.");
+      setError(formatAuthError(err));
     } finally {
       setIsLoading(false);
     }
@@ -78,7 +83,7 @@ export function AuthModal({
       onClose();
     } catch (err: any) {
       console.error("Google Auth error:", err);
-      setError(err?.message || "Google Sign-In could not be completed.");
+      setError(formatAuthError(err));
     } finally {
       setIsLoading(false);
     }
@@ -86,32 +91,39 @@ export function AuthModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto">
-      <div className="relative w-full max-w-md bg-[#141414] border border-white/15 rounded-2xl p-5 sm:p-6 shadow-2xl my-auto max-h-[92vh] flex flex-col overflow-hidden">
-        {/* Close Button */}
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 p-1.5 text-stone-400 hover:text-white rounded-lg hover:bg-white/10 transition cursor-pointer z-10"
-        >
-          <X className="w-4 h-4" />
-        </button>
-
-        {/* Scrollable Container so it always fits properly on any screen */}
-        <div className="overflow-y-auto pr-0.5 space-y-4">
-          {/* Modal Header */}
-          <div className="space-y-1 text-center pt-1">
-            <div className="w-9 h-9 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center justify-center mx-auto text-emerald-400 mb-1.5">
+      <div className="relative w-full max-w-md bg-[#141414] border border-white/15 rounded-2xl shadow-2xl my-auto max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
+        {/* Fixed Header with Guaranteed-Visible Cross Button */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10 flex-shrink-0 bg-[#161616]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex items-center justify-center text-emerald-400 flex-shrink-0">
               <Lock className="w-4 h-4" />
             </div>
-            <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-              {mode === "signin" ? "Sign In to TapShield" : "Create Your Account"}
-            </h2>
-            <p className="text-xs text-stone-400">
-              {mode === "signin"
-                ? "Access your business reputation dashboard"
-                : "Enter your details to create your store owner account"}
-            </p>
+            <div>
+              <h2 className="text-sm sm:text-base font-black text-white uppercase tracking-tight leading-tight">
+                {mode === "signin" ? "Sign In to TapShield" : "Create Your Account"}
+              </h2>
+              <p className="text-[10px] text-stone-400 font-mono">
+                {mode === "signin"
+                  ? "Access your store dashboard"
+                  : "Store owner registration"}
+              </p>
+            </div>
           </div>
 
+          {/* Prominent High-Contrast Close Button */}
+          <button
+            id="btn-close-auth-modal"
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-stone-200 hover:text-white flex items-center justify-center transition cursor-pointer flex-shrink-0 shadow"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Modal Body Container with Compact Spacing so it fits cleanly */}
+        <div className="p-4 sm:p-5 overflow-y-auto space-y-3 [scrollbar-width:thin]">
           {/* Mode Selector Tabs */}
           <div className="flex bg-[#0A0A0A] p-1 rounded-xl border border-white/10">
             <button
@@ -141,8 +153,8 @@ export function AuthModal({
           </div>
 
           {/* Stay Signed In Option */}
-          <div className="bg-[#0A0A0A] px-3 py-2 rounded-xl border border-white/10 flex items-center justify-between gap-2">
-            <label htmlFor="checkbox-stay-signed-in" className="flex items-center gap-2.5 select-none cursor-pointer flex-1">
+          <div className="bg-[#0A0A0A] px-3 py-1.5 rounded-xl border border-white/10 flex items-center justify-between gap-2">
+            <label htmlFor="checkbox-stay-signed-in" className="flex items-center gap-2 select-none cursor-pointer flex-1">
               <input
                 id="checkbox-stay-signed-in"
                 type="checkbox"
@@ -185,9 +197,6 @@ export function AuthModal({
               />
             </svg>
             <span>Continue with Google</span>
-            <span className="text-[10px] bg-emerald-500/20 text-emerald-800 px-1.5 py-0.5 rounded font-black">
-              Pre-Verified
-            </span>
           </button>
 
           <div className="flex items-center gap-3">
@@ -197,10 +206,10 @@ export function AuthModal({
           </div>
 
           {/* Email & Password Form */}
-          <form onSubmit={handleSubmit} className="space-y-3">
+          <form onSubmit={handleSubmit} className="space-y-2.5">
             {mode === "signup" && (
               <div className="space-y-1">
-                <label className="text-[11px] font-mono uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
                   <Store className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Business Name (Shows on Customer Page)</span>
                 </label>
@@ -216,7 +225,7 @@ export function AuthModal({
             )}
 
             <div className="space-y-1">
-              <label className="text-[11px] font-mono uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
+              <label className="text-[10px] font-mono uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
                 <Mail className="w-3.5 h-3.5 text-stone-400" />
                 <span>Email Address</span>
               </label>
@@ -232,7 +241,7 @@ export function AuthModal({
             </div>
 
             <div className="space-y-1">
-              <label className="text-[11px] font-mono uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
+              <label className="text-[10px] font-mono uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-stone-400" />
                 <span>Password</span>
               </label>
@@ -259,7 +268,7 @@ export function AuthModal({
               id="btn-auth-submit"
               type="submit"
               disabled={isLoading}
-              className="w-full py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition active:scale-98 cursor-pointer disabled:opacity-50 mt-1"
+              className="w-full py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition active:scale-98 cursor-pointer disabled:opacity-50 mt-1"
             >
               {isLoading ? (
                 <>
@@ -277,7 +286,7 @@ export function AuthModal({
             </button>
           </form>
 
-          <div className="text-center text-[11px] text-stone-400 pb-1">
+          <div className="text-center text-[10px] text-stone-400 pt-0.5">
             {mode === "signin" ? (
               <span>
                 Don't have an account yet?{" "}

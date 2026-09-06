@@ -66,5 +66,10 @@ service cloud.firestore {
                          exists(/databases/$(database)/documents/businesses/$(businessId));
       }
     }
+
+    // Temporary 6-digit OTP verification codes - accessible solely via server-side Admin SDK / Cloud Functions
+    match /verification_codes/{email} {
+      allow read, write: if false;
+    }
   }
 }

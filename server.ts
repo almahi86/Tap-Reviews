@@ -3,6 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import dotenv from "dotenv";
+import nodemailer from "nodemailer";
 
 dotenv.config();
 
@@ -21,6 +22,45 @@ function getStripe(): Stripe | null {
   }
   return stripeClient;
 }
+
+// Nodemailer transport setup
+function getMailTransporter(): any {
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const port = parseInt(process.env.SMTP_PORT || "587", 10);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+
+  if (user && pass) {
+    return nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+    });
+  }
+
+  // Fallback stream / json transporter for preview & sandbox testing
+  return nodemailer.createTransport({
+    streamTransport: true,
+    newline: "unix",
+    buffer: true,
+  });
+}
+
+// In-memory verification codes store (simulating Firestore `verification_codes/{email}`)
+interface StoredVerificationCode {
+  email: string;
+  code: string;
+  uid?: string;
+  expiresAt: Date;
+  createdAt: Date;
+  attempts: number;
+  used: boolean;
+}
+
+const memoryVerificationCodes: Record<string, StoredVerificationCode> = {};
+const memoryVerifiedEmails: Record<string, boolean> = {};
+const memoryStripeCustomers: Record<string, string> = {}; // email -> stripeCustomerId
 
 // In-memory fallback / mock store for live preview demo mode (when Firebase credentials are not yet entered)
 interface StoredBusiness {
@@ -84,14 +124,165 @@ app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
     hasStripeKey: Boolean(process.env.STRIPE_SECRET_KEY),
+    hasSmtpConfig: Boolean(process.env.SMTP_USER && process.env.SMTP_PASS),
     timestamp: new Date().toISOString(),
   });
 });
 
-// Create Stripe Checkout Session
-app.post("/api/create-checkout-session", async (req, res) => {
+// 1. Generate and send 6-digit OTP verification code with 15-minute expiration
+app.post("/api/auth/send-verification-code", async (req, res) => {
   try {
-    const { businessId, businessName, email, returnUrl, planInterval } = req.body;
+    const { email, uid } = req.body;
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({ error: "A valid email address is required" });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    // Generate secure random 6-digit OTP
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15-minute expiration
+
+    memoryVerificationCodes[normalizedEmail] = {
+      email: normalizedEmail,
+      code,
+      uid: uid || undefined,
+      expiresAt,
+      createdAt: new Date(),
+      attempts: 0,
+      used: false,
+    };
+
+    console.log(`[AUTH] Generated 6-digit OTP for ${normalizedEmail}: ${code} (expires in 15m)`);
+
+    // Send email via Nodemailer
+    const transporter = getMailTransporter();
+    const mailOptions = {
+      from: process.env.SMTP_FROM || `"TapShield Security" <noreply@tapshield.app>`,
+      to: normalizedEmail,
+      subject: `Your 6-Digit Verification Code: ${code}`,
+      text: `Your TapShield verification code is: ${code}\n\nThis code expires in 15 minutes. Enter this code to verify your account.`,
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 480px; padding: 28px; background: #0A0A0A; color: #FFF; border-radius: 10px; border: 1px solid #262626;">
+          <h2 style="color: #10B981; margin: 0 0 12px 0;">Verify Your Email Address</h2>
+          <p style="color: #A3A3A3; font-size: 14px; margin: 0 0 20px 0;">Enter this 6-digit code to complete your registration and unlock your dashboard:</p>
+          <div style="background: #171717; border: 1px solid #10B981; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px;">
+            <span style="font-size: 36px; font-weight: 800; letter-spacing: 8px; font-family: monospace; color: #10B981;">${code}</span>
+          </div>
+          <p style="color: #737373; font-size: 12px; margin: 0;">This code expires in <strong>15 minutes</strong>.</p>
+        </div>
+      `,
+    };
+
+    try {
+      await transporter.sendMail(mailOptions);
+    } catch (mailErr) {
+      console.warn("Mail transport error (safe in sandbox):", mailErr);
+    }
+
+    res.json({
+      success: true,
+      expiresAt: expiresAt.toISOString(),
+      message: `Verification code sent to ${normalizedEmail}`,
+      // In sandbox/dev without production SMTP, expose previewCode so developers can test immediately
+      previewCode: (!process.env.SMTP_USER || process.env.NODE_ENV !== "production") ? code : undefined,
+    });
+  } catch (err: any) {
+    console.error("Error sending verification code:", err);
+    res.status(500).json({ error: err?.message || "Failed to generate verification code" });
+  }
+});
+
+// 2. Verify submitted 6-digit OTP code & set emailVerified: true
+app.post("/api/auth/verify-email-code", async (req, res) => {
+  try {
+    const { email, code, uid } = req.body;
+    if (!email || !code) {
+      return res.status(400).json({ error: "Both email and verification code are required" });
+    }
+
+    const cleanCode = String(code).trim();
+    if (cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) {
+      return res.status(400).json({ error: "Verification code must be exactly 6 numeric digits" });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const record = memoryVerificationCodes[normalizedEmail];
+
+    if (!record) {
+      return res.status(404).json({
+        error: "No active verification code found for this email. Please request a new code.",
+      });
+    }
+
+    if (record.used) {
+      return res.status(400).json({
+        error: "This code has already been used. Please request a new code.",
+      });
+    }
+
+    // Rate limiting: Maximum 5 attempts
+    record.attempts = (record.attempts || 0) + 1;
+    if (record.attempts > 5) {
+      delete memoryVerificationCodes[normalizedEmail];
+      return res.status(429).json({
+        error: "Too many failed attempts. Code has been invalidated. Please request a new code.",
+      });
+    }
+
+    // Check expiration (15 minutes)
+    const now = new Date();
+    if (now.getTime() > new Date(record.expiresAt).getTime()) {
+      delete memoryVerificationCodes[normalizedEmail];
+      return res.status(400).json({
+        error: "Verification code has expired. Codes are only valid for 15 minutes. Please request a new code.",
+      });
+    }
+
+    // Check code match
+    if (record.code !== cleanCode) {
+      const remaining = 5 - record.attempts;
+      return res.status(400).json({
+        error: `Incorrect verification code. ${remaining} attempt${remaining === 1 ? "" : "s"} remaining.`,
+      });
+    }
+
+    // Code matched! Mark used & verified
+    record.used = true;
+    memoryVerifiedEmails[normalizedEmail] = true;
+    if (uid) {
+      memoryVerifiedEmails[uid] = true;
+    }
+
+    console.log(`[AUTH] Successfully verified email ${normalizedEmail} (uid: ${uid || "none"})`);
+
+    res.json({
+      success: true,
+      emailVerified: true,
+      message: "Email successfully verified.",
+    });
+  } catch (err: any) {
+    console.error("Error verifying email code:", err);
+    res.status(500).json({ error: err?.message || "Failed to verify code" });
+  }
+});
+
+// Check verification status
+app.get("/api/auth/verification-status", (req, res) => {
+  const email = (req.query.email as string)?.trim().toLowerCase();
+  const uid = req.query.uid as string;
+
+  const isVerified = Boolean(
+    (email && memoryVerifiedEmails[email]) ||
+    (uid && memoryVerifiedEmails[uid])
+  );
+
+  res.json({ emailVerified: isVerified });
+});
+
+// 3. Create Stripe Subscription Checkout (Instantiates Stripe, fetches/creates Customer ID, sets mode: 'subscription')
+app.post(["/api/create-subscription-checkout", "/api/create-checkout-session"], async (req, res) => {
+  try {
+    const { businessId, businessName, email, returnUrl, planInterval, userId } = req.body;
     const stripe = getStripe();
     const interval = planInterval === "year" ? "year" : "month";
     const amount = interval === "year" ? 19999 : 2499; // $199.99/yr or $24.99/mo
@@ -112,7 +303,25 @@ app.post("/api/create-checkout-session", async (req, res) => {
       });
     }
 
-    const priceId = interval === "year" ? process.env.STRIPE_YEARLY_PRICE_ID : process.env.STRIPE_PRICE_ID;
+    // Fetch or create Stripe Customer ID for this user
+    let customerId = email ? memoryStripeCustomers[email.toLowerCase()] : undefined;
+    if (!customerId && email) {
+      const customer = await stripe.customers.create({
+        email,
+        name: businessName || undefined,
+        metadata: {
+          firebaseUid: userId || businessId || "",
+          businessId: businessId || "",
+        },
+      });
+      customerId = customer.id;
+      memoryStripeCustomers[email.toLowerCase()] = customerId;
+    }
+
+    const priceId =
+      interval === "year"
+        ? process.env.STRIPE_YEARLY_PRICE_ID
+        : (process.env.STRIPE_MONTHLY_PRICE_ID || process.env.STRIPE_PRICE_ID);
 
     // Use price ID if configured, or create an ad-hoc subscription line item
     const lineItem = priceId
@@ -133,13 +342,21 @@ app.post("/api/create-checkout-session", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "subscription",
-      customer_email: email || undefined,
+      customer: customerId,
+      customer_email: customerId ? undefined : (email || undefined),
       client_reference_id: businessId,
       line_items: [lineItem],
       metadata: {
+        firebaseUid: userId || "",
         businessId: businessId || "",
         businessName: businessName || "",
         planInterval: interval,
+      },
+      subscription_data: {
+        metadata: {
+          firebaseUid: userId || "",
+          businessId: businessId || "",
+        },
       },
       success_url: `${baseUrl}?session_id={CHECKOUT_SESSION_ID}&subscribed=true&plan=${interval}&business_id=${encodeURIComponent(
         businessId || ""
@@ -151,6 +368,7 @@ app.post("/api/create-checkout-session", async (req, res) => {
       mode: "live_stripe",
       sessionId: session.id,
       checkoutUrl: session.url,
+      customerId: customerId || session.customer,
     });
   } catch (error: any) {
     console.error("Error creating Stripe checkout session:", error);

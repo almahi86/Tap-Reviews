@@ -84,6 +84,36 @@
         }
       },
       "required": ["businessId", "rating", "customerNote", "status"]
+    },
+    "VerificationCode": {
+      "title": "VerificationCode",
+      "description": "Temporary 6-digit OTP verification code for email verification.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "User email address awaiting verification."
+        },
+        "code": {
+          "type": "string",
+          "description": "6-digit numeric OTP code."
+        },
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when this code expires (15 minutes from creation)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the code was sent."
+        }
+      },
+      "required": ["email", "code", "expiresAt"]
     }
   },
   "firestore": {
@@ -94,6 +124,10 @@
     "/businesses/{businessId}/feedbacks/{feedbackId}": {
       "schema": "Feedback",
       "description": "Private subcollection of customer feedback documents visible only to the business owner."
+    },
+    "/verification_codes/{email}": {
+      "schema": "VerificationCode",
+      "description": "Stores temporary 6-digit OTP codes with 15-minute expiration timestamp."
     }
   }
 }

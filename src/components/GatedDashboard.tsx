@@ -30,6 +30,7 @@ import {
   signInWithGoogle,
   isFirebaseConfigured,
 } from "../lib/firebase";
+import { triggerStripeSubscriptionCheckout } from "../lib/auth-service";
 import type { Business, FeedbackItem, AuthUserProfile } from "../types";
 import { WeeklyAnalyticsChart } from "./WeeklyAnalyticsChart";
 
@@ -147,31 +148,12 @@ export function GatedDashboard({
     setCheckoutError(null);
     try {
       const interval = intervalToUse || paywallBillingCycle;
-      const returnUrl = window.location.origin + window.location.pathname;
-      const res = await fetch("/api/create-checkout-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId: effectiveBusinessId,
-          businessName: businessName || "My Business",
-          email: currentUser?.email || "owner@example.com",
-          returnUrl,
-          planInterval: interval,
-        }),
+      await triggerStripeSubscriptionCheckout({
+        businessId: effectiveBusinessId,
+        businessName: businessName || "My Business",
+        planInterval: interval,
+        user: currentUser,
       });
-
-      const data = await res.json();
-      if (data.checkoutUrl) {
-        if (data.mode === "demo") {
-          // In demo sandbox, redirect or activate directly
-          window.location.href = data.checkoutUrl;
-        } else {
-          // Real Stripe redirect
-          window.location.href = data.checkoutUrl;
-        }
-      } else {
-        throw new Error(data.error || "Failed to initialize Stripe checkout");
-      }
     } catch (err: any) {
       console.error("Stripe checkout trigger error:", err);
       setCheckoutError(err?.message || "Failed to launch Stripe Checkout");
@@ -298,9 +280,15 @@ export function GatedDashboard({
                 <div className="w-7 h-7 rounded-full bg-white text-black flex items-center justify-center text-xs font-black">
                   {currentUser.displayName?.[0] || currentUser.email?.[0] || "O"}
                 </div>
-                <span className="text-xs font-bold text-stone-300 hidden md:inline">
-                  {currentUser.displayName || currentUser.email}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-stone-300 hidden md:inline">
+                    {currentUser.displayName || currentUser.email}
+                  </span>
+                  <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    <CheckCircle2 className="w-3 h-3" />
+                    <span>Verified</span>
+                  </span>
+                </div>
                 <button
                   id="btn-sign-out"
                   onClick={async () => {

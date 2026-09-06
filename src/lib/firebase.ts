@@ -72,15 +72,17 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 export type { AuthUserProfile };
 
-// Check if credentials are present in env
+import firebaseAppletConfig from "../../firebase-applet-config.json";
+
+// Check if credentials are present in env or provisioned firebase-applet-config.json
 const env = (import.meta as any).env || {};
 const firebaseConfig = {
-  apiKey: env.VITE_FIREBASE_API_KEY || "",
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || "",
-  projectId: env.VITE_FIREBASE_PROJECT_ID || "",
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || "",
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
-  appId: env.VITE_FIREBASE_APP_ID || "",
+  apiKey: env.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey || "",
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain || "",
+  projectId: env.VITE_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId || "",
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket || "",
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId || "",
+  appId: env.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId || "",
 };
 
 export const isFirebaseConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
@@ -93,7 +95,8 @@ if (isFirebaseConfigured) {
   try {
     app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
     auth = getAuth(app);
-    db = getFirestore(app);
+    const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
+    db = dbId ? getFirestore(app, dbId) : getFirestore(app);
   } catch (err) {
     console.warn("Firebase initialization warning (will use local server API fallback):", err);
   }

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import {
   Shield,
   Smartphone,
@@ -18,8 +18,10 @@ import {
   CreditCard,
   User,
   LogOut,
+  ShieldCheck,
 } from "lucide-react";
 import type { AuthUserProfile } from "../types";
+import { AuthModal } from "./AuthModal";
 
 interface LandingPageProps {
   currentUser: AuthUserProfile | null;
@@ -30,6 +32,7 @@ interface LandingPageProps {
   onSubscribe: (interval: "month" | "year") => Promise<void>;
   onActivateSandbox: () => void;
   isCheckingOut: boolean;
+  onPreviewCodeReceived?: (code: string) => void;
 }
 
 export function LandingPage({
@@ -41,22 +44,10 @@ export function LandingPage({
   onSubscribe,
   onActivateSandbox,
   isCheckingOut,
+  onPreviewCodeReceived,
 }: LandingPageProps) {
   const [billingCycle, setBillingCycle] = useState<"month" | "year">("year");
   const [showLoginModal, setShowLoginModal] = useState(false);
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginName, setLoginName] = useState("");
-
-  const handleDemoLogin = (e: FormEvent) => {
-    e.preventDefault();
-    onUserAuthChange({
-      uid: `owner_${Date.now()}`,
-      email: loginEmail || "owner@mystore.com",
-      displayName: loginName || "Store Owner",
-      isDemo: true,
-    });
-    setShowLoginModal(false);
-  };
 
   return (
     <div id="landing-page" className="min-h-screen bg-[#0A0A0A] text-white selection:bg-emerald-500 selection:text-black">
@@ -784,67 +775,19 @@ export function LandingPage({
         </p>
       </footer>
 
-      {/* Owner Login Modal */}
-      {showLoginModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#161616] border border-white/20 rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded bg-emerald-500 text-black flex items-center justify-center font-black">
-                  <User className="w-4 h-4" />
-                </div>
-                <h3 className="font-black uppercase text-white text-lg">Store Owner Login</h3>
-              </div>
-              <button
-                onClick={() => setShowLoginModal(false)}
-                className="text-stone-400 hover:text-white font-mono text-xs uppercase"
-              >
-                ✕ Close
-              </button>
-            </div>
-
-            <p className="text-xs text-stone-400">
-              Sign in with your store owner credentials to access your protected dashboard and review
-              analytics.
-            </p>
-
-            <form onSubmit={handleDemoLogin} className="space-y-4">
-              <div className="space-y-1">
-                <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-300">
-                  Store Owner Name
-                </label>
-                <input
-                  type="text"
-                  value={loginName}
-                  onChange={(e) => setLoginName(e.target.value)}
-                  placeholder="e.g. Sarah Jenkins"
-                  className="w-full text-xs font-mono p-3 rounded border border-white/20 bg-[#0A0A0A] text-white focus:border-emerald-500 outline-none"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-[10px] font-mono uppercase tracking-wider text-stone-300">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="owner@mybusiness.com"
-                  className="w-full text-xs font-mono p-3 rounded border border-white/20 bg-[#0A0A0A] text-white focus:border-emerald-500 outline-none"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-3.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider transition cursor-pointer"
-              >
-                Sign In & Access
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Senior Firebase Auth Modal */}
+      <AuthModal
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+        onAuthSuccess={(user, previewCode) => {
+          onUserAuthChange(user);
+          if (previewCode && onPreviewCodeReceived) {
+            onPreviewCodeReceived(previewCode);
+          }
+          // Proceed to guarded dashboard view
+          onEnterDashboard();
+        }}
+      />
     </div>
   );
 }

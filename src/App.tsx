@@ -2,10 +2,23 @@ import { useState, useEffect } from "react";
 import { NfcRatingPage } from "./components/NfcRatingPage";
 import { GatedDashboard } from "./components/GatedDashboard";
 import { LandingPage } from "./components/LandingPage";
-import { auth, fetchBusiness, saveBusinessProfile } from "./lib/firebase";
-import type { AuthUserProfile, Business } from "./types";
+import { EmailVerificationScreen } from "./components/EmailVerificationScreen";
+import { AuthModal } from "./components/AuthModal";
+import { auth, fetchBusiness, saveBusinessProfile, signOutUser } from "./lib/firebase";
+import { triggerStripeSubscriptionCheckout, checkEmailVerificationStatus } from "./lib/auth-service";
+import type { AuthUserProfile } from "./types";
 import { onAuthStateChanged } from "firebase/auth";
-import { Smartphone, LayoutDashboard, Globe, Lock, CheckCircle2 } from "lucide-react";
+import {
+  Smartphone,
+  LayoutDashboard,
+  Globe,
+  Lock,
+  CheckCircle2,
+  AlertCircle,
+  LogOut,
+  User,
+  ShieldCheck,
+} from "lucide-react";
 
 export default function App() {
   // Parse URL on initial load to determine route
@@ -40,13 +53,18 @@ export default function App() {
   const [currentView, setCurrentView] = useState<"landing" | "dashboard" | "rate">(initial.view);
   const [activeBusinessId, setActiveBusinessId] = useState<string>(initial.businessId);
 
-  // Authenticated user profile
+  // Authenticated user profile: starts with demo verified user or null
   const [currentUser, setCurrentUser] = useState<AuthUserProfile | null>({
     uid: "demo_owner_1",
     displayName: "Artisan Owner",
     email: "owner@artisanbrews.com",
+    emailVerified: true,
     isDemo: true,
   });
+
+  // Auth modal control
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [activePreviewCode, setActivePreviewCode] = useState<string | undefined>(undefined);
 
   // Subscription state: tracks if business owner has active access
   const [isSubscribed, setIsSubscribed] = useState<boolean>(true);
@@ -79,12 +97,22 @@ export default function App() {
   // Listen to Firebase Auth if active
   useEffect(() => {
     if (auth) {
-      const unsubscribe = onAuthStateChanged(auth, (user) => {
+      const unsubscribe = onAuthStateChanged(auth, async (user) => {
         if (user) {
+          let verified = user.emailVerified;
+          // Check backend OTP verification store if client auth has false
+          if (!verified && user.email) {
+            try {
+              verified = await checkEmailVerificationStatus(user.email, user.uid);
+            } catch {
+              // keep existing
+            }
+          }
           setCurrentUser({
             uid: user.uid,
             email: user.email,
             displayName: user.displayName,
+            emailVerified: verified,
           });
         }
       });
@@ -94,38 +122,25 @@ export default function App() {
 
   // Handle Stripe Subscription checkout from Landing page or Dashboard
   const handleSubscribe = async (interval: "month" | "year") => {
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    if (!currentUser.emailVerified) {
+      // Actively guard: route to verification screen
+      setCurrentView("dashboard");
+      return;
+    }
+
     setIsCheckingOut(true);
     try {
-      const returnUrl = `${window.location.origin}${window.location.pathname}?subscribed=true&view=dashboard`;
-      const res = await fetch("/api/create-checkout-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId: activeBusinessId,
-          businessName: "Downtown Artisan Cafe",
-          email: currentUser?.email || "owner@artisanbrews.com",
-          returnUrl,
-          planInterval: interval,
-        }),
+      await triggerStripeSubscriptionCheckout({
+        businessId: activeBusinessId,
+        businessName: "Downtown Artisan Cafe",
+        planInterval: interval,
+        user: currentUser,
       });
-
-      const data = await res.json();
-      if (data.checkoutUrl) {
-        if (data.mode === "demo") {
-          // Direct sandbox activation
-          setIsSubscribed(true);
-          await saveBusinessProfile({
-            id: activeBusinessId,
-            subscriptionStatus: "active",
-          });
-          setCurrentView("dashboard");
-        } else {
-          // Redirect to live Stripe Checkout
-          window.location.href = data.checkoutUrl;
-        }
-      } else {
-        throw new Error(data.error || "Failed to create Stripe session");
-      }
     } catch (err) {
       console.error("Subscription checkout error:", err);
       // Fallback sandbox activation to never block the reviewer
@@ -150,10 +165,23 @@ export default function App() {
     setCurrentView("dashboard");
   };
 
+  const handleSignOut = async () => {
+    try {
+      await signOutUser();
+    } catch {
+      // ignored
+    }
+    setCurrentUser(null);
+    setActivePreviewCode(undefined);
+  };
+
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col font-sans selection:bg-emerald-500 selection:text-black">
       {/* Universal Flow Switcher Bar */}
-      <nav aria-label="Demo flow navigation" className="bg-[#0F0F0F] text-stone-300 px-4 py-2.5 text-xs flex flex-wrap items-center justify-between border-b border-white/10 shadow-sm z-50 gap-2">
+      <nav
+        aria-label="Demo flow navigation"
+        className="bg-[#0F0F0F] text-stone-300 px-4 py-2.5 text-xs flex flex-wrap items-center justify-between border-b border-white/10 shadow-sm z-40 gap-2"
+      >
         <div className="flex items-center gap-2.5">
           <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center font-black text-black text-xs">
             R
@@ -208,6 +236,57 @@ export default function App() {
             <span>Customer NFC Tap</span>
           </button>
         </div>
+
+        {/* User Authentication Status & Actions */}
+        <div className="flex items-center gap-2">
+          {currentUser ? (
+            <div className="flex items-center gap-2 bg-[#161616] px-2.5 py-1 rounded-lg border border-white/10 text-xs">
+              <div className="w-5 h-5 rounded-full bg-emerald-500 text-black flex items-center justify-center text-[10px] font-black">
+                {currentUser.displayName?.[0] || currentUser.email?.[0] || "U"}
+              </div>
+              <span className="font-mono text-[11px] text-stone-300 max-w-[140px] truncate hidden sm:inline">
+                {currentUser.email || currentUser.displayName}
+              </span>
+
+              {/* Email verification status badge */}
+              {currentUser.emailVerified ? (
+                <span
+                  title="Email verified. Full access granted."
+                  className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span className="hidden md:inline">Verified</span>
+                </span>
+              ) : (
+                <button
+                  onClick={() => setCurrentView("dashboard")}
+                  title="Email unverified. Click to enter 6-digit code."
+                  className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 cursor-pointer animate-pulse"
+                >
+                  <AlertCircle className="w-3 h-3" />
+                  <span>Verify OTP</span>
+                </button>
+              )}
+
+              <button
+                onClick={handleSignOut}
+                title="Sign Out"
+                className="text-stone-400 hover:text-rose-400 p-1 cursor-pointer transition"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              id="btn-nav-open-auth"
+              onClick={() => setIsAuthModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black text-[11px] uppercase tracking-wider transition cursor-pointer"
+            >
+              <User className="w-3.5 h-3.5" />
+              <span>Sign In</span>
+            </button>
+          )}
+        </div>
       </nav>
 
       {/* Screen Views */}
@@ -222,19 +301,55 @@ export default function App() {
             onSubscribe={handleSubscribe}
             onActivateSandbox={handleActivateSandbox}
             isCheckingOut={isCheckingOut}
+            onPreviewCodeReceived={(code) => setActivePreviewCode(code)}
           />
         )}
 
         {currentView === "dashboard" && (
-          <GatedDashboard
-            currentUser={currentUser}
-            onOpenCustomerRateView={(bizId) => {
-              setActiveBusinessId(bizId);
-              setCurrentView("rate");
-            }}
-            onUserAuthChange={setCurrentUser}
-            onBackToLanding={() => setCurrentView("landing")}
-          />
+          // ACTIVE ROUTING GUARD
+          !currentUser ? (
+            <div className="min-h-[80vh] flex items-center justify-center p-4">
+              <div className="bg-[#141414] border border-white/10 rounded-2xl p-8 max-w-md w-full text-center space-y-5">
+                <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <h2 className="text-xl font-black uppercase text-white">Owner Login Required</h2>
+                <p className="text-xs text-stone-400 leading-relaxed">
+                  Please sign in to access your reputation dashboard, review private negative customer
+                  feedback, and configure your store's NFC redirect URL.
+                </p>
+                <button
+                  id="btn-login-prompt"
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="w-full py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider transition cursor-pointer shadow-lg shadow-emerald-500/10"
+                >
+                  Sign In / Create Account
+                </button>
+              </div>
+            </div>
+          ) : !currentUser.emailVerified ? (
+            // User is unverified! ACTIVELY GUARD: display EmailVerificationScreen
+            <EmailVerificationScreen
+              currentUser={currentUser}
+              initialPreviewCode={activePreviewCode}
+              onVerified={(verifiedUser) => {
+                setCurrentUser(verifiedUser);
+                setActivePreviewCode(undefined);
+              }}
+              onSignOut={handleSignOut}
+            />
+          ) : (
+            // User is verified! Full access to protected GatedDashboard
+            <GatedDashboard
+              currentUser={currentUser}
+              onOpenCustomerRateView={(bizId) => {
+                setActiveBusinessId(bizId);
+                setCurrentView("rate");
+              }}
+              onUserAuthChange={setCurrentUser}
+              onBackToLanding={() => setCurrentView("landing")}
+            />
+          )
         )}
 
         {currentView === "rate" && (
@@ -244,6 +359,20 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Global Senior Firebase Auth Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={(user, previewCode) => {
+          setCurrentUser(user);
+          if (previewCode) {
+            setActivePreviewCode(previewCode);
+          }
+          // Navigate to dashboard (which will actively guard if unverified, or open if verified)
+          setCurrentView("dashboard");
+        }}
+      />
     </div>
   );
 }

@@ -27,7 +27,22 @@ export interface AuthUserProfile {
   uid: string;
   email: string | null;
   displayName: string | null;
+  emailVerified?: boolean;
   isDemo?: boolean;
+}
+
+export interface VerificationCodeRecord {
+  email: string;
+  code: string;
+  uid?: string;
+  expiresAt: string; // ISO string
+  createdAt: string;
+}
+
+export interface VerificationResult {
+  success: boolean;
+  message?: string;
+  emailVerified?: boolean;
 }
 
 export type RatingFlowState = 'initial' | 'redirecting_like' | 'dislike_form' | 'dislike_submitted';

@@ -119,7 +119,7 @@ export function NfcRatingPage({
       <header className="w-full max-w-md flex items-center justify-between text-xs text-stone-400 mb-6 px-1">
         <div className="flex items-center gap-2 font-mono uppercase tracking-widest text-[11px] text-emerald-400 font-bold">
           <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <span>Verified In-Store NFC Tap</span>
+          <span>{business?.businessName ? `${business.businessName} • NFC Tap` : "Verified In-Store NFC Tap"}</span>
         </div>
         {onNavigateToDashboard && (
           <button
@@ -232,10 +232,10 @@ export function NfcRatingPage({
                     Google Review Boost
                   </p>
                   <h3 className="text-3xl font-black uppercase tracking-tight text-white leading-tight">
-                    We’re thrilled<br />you enjoyed it!
+                    We’re thrilled you enjoyed<br />{business?.businessName || "your visit"}!
                   </h3>
                   <p className="text-xs text-stone-400 max-w-xs mx-auto leading-relaxed">
-                    Redirecting you to share your positive rating on Google Maps in{" "}
+                    Redirecting you to share your positive rating for {business?.businessName || "us"} on Google Maps in{" "}
                     <span className="font-black text-emerald-400 font-mono text-sm">{redirectCountdown}s</span>...
                   </p>
                 </div>
@@ -289,7 +289,7 @@ export function NfcRatingPage({
                     We’re so sorry.<br />What went wrong?
                   </h3>
                   <p className="text-xs text-stone-400">
-                    Your feedback is saved privately to our management inbox so we can fix it immediately.
+                    Your feedback is saved privately to {business?.businessName ? `${business.businessName}'s` : "our"} management inbox so we can fix it immediately.
                   </p>
                 </div>
 
@@ -391,7 +391,7 @@ export function NfcRatingPage({
                     Thank you for<br />helping us improve
                   </h3>
                   <p className="text-xs text-stone-400 max-w-xs mx-auto leading-relaxed">
-                    Your note was saved privately in the store owner's dashboard. It will never appear on public review sites.
+                    Your note was saved privately in {business?.businessName ? `${business.businessName}'s` : "the store owner's"} dashboard. It will never appear on public review sites.
                   </p>
                 </div>
                 <div className="pt-4">

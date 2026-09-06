@@ -336,7 +336,14 @@ export const createStripeSubscriptionCheckout = onCall(
         ? process.env.STRIPE_YEARLY_PRICE_ID
         : (process.env.STRIPE_MONTHLY_PRICE_ID || process.env.STRIPE_PRICE_ID);
 
-    const lineItem = priceId
+    // 5. Success & Cancel URLs
+    const origin = returnUrl || "https://tapshield.app";
+    const successUrl = `${origin}?session_id={CHECKOUT_SESSION_ID}&subscribed=true&plan=${interval}&business_id=${encodeURIComponent(
+      businessId
+    )}`;
+    const cancelUrl = `${origin}?canceled=true&business_id=${encodeURIComponent(businessId)}`;
+
+    const item: Stripe.Checkout.SessionCreateParams.LineItem = priceId
       ? { price: priceId, quantity: 1 }
       : {
           price_data: {
@@ -353,19 +360,12 @@ export const createStripeSubscriptionCheckout = onCall(
           quantity: 1,
         };
 
-    // 5. Success & Cancel URLs
-    const origin = returnUrl || "https://tapshield.app";
-    const successUrl = `${origin}?session_id={CHECKOUT_SESSION_ID}&subscribed=true&plan=${interval}&business_id=${encodeURIComponent(
-      businessId
-    )}`;
-    const cancelUrl = `${origin}?canceled=true&business_id=${encodeURIComponent(businessId)}`;
-
     // 6. Generate Stripe Checkout Session with mode: 'subscription'
     const session = await stripe.checkout.sessions.create({
       customer: stripeCustomerId,
-      payment_method_types: ["card"],
       mode: "subscription",
-      line_items: [lineItem],
+      line_items: [item],
+      managed_payments: { enabled: false },
       metadata: {
         firebaseUid: uid,
         businessId,

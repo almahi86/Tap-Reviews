@@ -9,6 +9,7 @@ import {
   type User,
 } from "firebase/auth";
 import {
+  initializeFirestore,
   getFirestore,
   doc,
   getDoc,
@@ -95,12 +96,33 @@ if (isFirebaseConfigured) {
   try {
     app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
     auth = getAuth(app);
-    const dbId = (firebaseAppletConfig as any).firestoreDatabaseId;
-    db = dbId ? getFirestore(app, dbId) : getFirestore(app);
+    const dbId = (firebaseAppletConfig as any).firestoreDatabaseId || "(default)";
+    try {
+      db = initializeFirestore(
+        app,
+        {
+          experimentalAutoDetectLongPolling: true,
+        },
+        dbId
+      );
+    } catch {
+      // If already initialized (e.g. during fast refresh)
+      db = dbId && dbId !== "(default)" ? getFirestore(app, dbId) : getFirestore(app);
+    }
   } catch (err) {
     console.warn("Firebase initialization warning (will use local server API fallback):", err);
   }
 }
+
+// Timeout helper to avoid infinite hanging when client network is offline or firestore backend is unavailable
+const withTimeout = <T>(promise: Promise<T>, timeoutMs = 3000): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("Firestore operation timed out")), timeoutMs)
+    ),
+  ]);
+};
 
 // Local mock storage key for when running in sandbox without Firebase credentials
 const LOCAL_STORAGE_FEEDBACKS_KEY = "tapshield_feedbacks_cache";
@@ -108,15 +130,14 @@ const LOCAL_STORAGE_BIZ_KEY = "tapshield_biz_cache";
 
 export async function fetchBusiness(businessId: string): Promise<Business> {
   if (db) {
-    const docPath = `businesses/${businessId}`;
     try {
       const docRef = doc(db, "businesses", businessId);
-      const snapshot = await getDoc(docRef);
+      const snapshot = await withTimeout(getDoc(docRef), 3000);
       if (snapshot.exists()) {
         return { id: snapshot.id, ...snapshot.data() } as Business;
       }
     } catch (error) {
-      console.warn("Firestore fetchBusiness error, falling back to server API:", error);
+      console.warn("Firestore fetchBusiness error or timeout, falling back to server API:", error);
     }
   }
 
@@ -130,44 +151,52 @@ export async function fetchBusiness(businessId: string): Promise<Business> {
     console.warn("Server API fetch error:", err);
   }
 
-  // Fallback default
+  // Fallback default: demo-cafe is active, while newly accessed businesses are inactive until paid
+  const isDemo = businessId === "demo-cafe";
   return {
     id: businessId,
     ownerUid: `owner_${businessId}`,
-    businessName: "Artisan Brews & Roastery",
-    googleMapsReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
-    subscriptionStatus: "active",
+    businessName: isDemo ? "Artisan Brews & Roastery" : "My Store",
+    googleMapsReviewUrl: isDemo ? "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4" : "",
+    subscriptionStatus: isDemo ? "active" : "inactive",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 }
 
 export async function saveBusinessProfile(data: Partial<Business> & { id: string }): Promise<void> {
-  const docPath = `businesses/${data.id}`;
   const currentUser = auth?.currentUser;
+  const payload = {
+    businessName: data.businessName || "My Store",
+    googleMapsReviewUrl: data.googleMapsReviewUrl ?? "",
+    subscriptionStatus: data.subscriptionStatus || "inactive",
+    ...data,
+    id: data.id,
+    ownerUid: data.ownerUid || currentUser?.uid || `owner_${data.id}`,
+    updatedAt: new Date().toISOString(),
+  };
+
   if (db && currentUser) {
     try {
       const docRef = doc(db, "businesses", data.id);
-      await setDoc(docRef, {
-        ...data,
-        ownerUid: currentUser.uid,
-        updatedAt: new Date().toISOString(),
-      }, { merge: true });
-      return;
+      await setDoc(docRef, payload, { merge: true });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, docPath);
+      console.warn("Firestore saveBusinessProfile warning, syncing via server fallback:", error);
     }
   }
 
-  // Fallback to Express backend API
-  const res = await fetch(`/api/businesses/${encodeURIComponent(data.id)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-
-  if (!res.ok) {
-    throw new Error("Failed to save business profile");
+  // Always sync to Express backend API to keep local cache and session consistent
+  try {
+    const res = await fetch(`/api/businesses/${encodeURIComponent(data.id)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      console.warn("Server API returned error on saveBusinessProfile:", await res.text());
+    }
+  } catch (err) {
+    console.warn("Server API sync error:", err);
   }
 }
 
@@ -179,15 +208,14 @@ export async function submitCustomerFeedback(
     id: `fb_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     businessId,
     rating,
-    customerNote,
-    customerContact,
-    customerName,
+    customerNote: customerNote || "",
+    customerContact: customerContact || "",
+    customerName: customerName || "",
     status: "new",
     createdAt: new Date().toISOString(),
   };
 
   if (db) {
-    const writePath = `businesses/${businessId}/feedbacks/${newFeedback.id}`;
     try {
       const feedbackDocRef = doc(db, "businesses", businessId, "feedbacks", newFeedback.id);
       await setDoc(feedbackDocRef, newFeedback);
@@ -218,38 +246,12 @@ export function subscribeToFeedbacks(
   // CRITICAL (Firebase Skill): Only attach onSnapshot listeners if auth is ready and user is authenticated!
   const currentUser = auth?.currentUser;
   const isAuthorizedOwner =
-    currentUser &&
-    (currentUser.uid === businessId ||
-      businessId === `biz_${currentUser.uid}` ||
-      businessId.startsWith(currentUser.uid));
+    Boolean(currentUser) &&
+    (currentUser?.uid === businessId ||
+      businessId === `biz_${currentUser?.uid}` ||
+      businessId === "demo-cafe" ||
+      businessId.startsWith(currentUser?.uid || ""));
 
-  if (db && isAuthorizedOwner) {
-    const colPath = `businesses/${businessId}/feedbacks`;
-    try {
-      const q = query(
-        collection(db, "businesses", businessId, "feedbacks"),
-        orderBy("createdAt", "desc")
-      );
-      const unsubscribe = onSnapshot(
-        q,
-        (snapshot) => {
-          const items: FeedbackItem[] = [];
-          snapshot.forEach((docSnap) => {
-            items.push({ id: docSnap.id, ...docSnap.data() } as FeedbackItem);
-          });
-          onUpdate(items);
-        },
-        (error) => {
-          handleFirestoreError(error, OperationType.GET, colPath);
-        }
-      );
-      return unsubscribe;
-    } catch (err) {
-      console.warn("Failed to subscribe via Firestore, falling back to polling:", err);
-    }
-  }
-
-  // Fallback: poll server API (active for demo mode and unauthenticated previews)
   let active = true;
   const fetchFeedbacks = async () => {
     try {
@@ -263,11 +265,43 @@ export function subscribeToFeedbacks(
     }
   };
 
+  let unsubscribeFirestore: (() => void) | null = null;
+
+  if (db && isAuthorizedOwner) {
+    try {
+      const q = query(
+        collection(db, "businesses", businessId, "feedbacks"),
+        orderBy("createdAt", "desc")
+      );
+      unsubscribeFirestore = onSnapshot(
+        q,
+        (snapshot) => {
+          if (!active) return;
+          const items: FeedbackItem[] = [];
+          snapshot.forEach((docSnap) => {
+            items.push({ id: docSnap.id, ...docSnap.data() } as FeedbackItem);
+          });
+          onUpdate(items);
+        },
+        (error) => {
+          console.warn("Firestore feedback listener warning, using server polling fallback:", error);
+          fetchFeedbacks();
+        }
+      );
+    } catch (err) {
+      console.warn("Failed to subscribe via Firestore, falling back to polling:", err);
+    }
+  }
+
+  // Initial fetch from backend API
   fetchFeedbacks();
   const interval = setInterval(fetchFeedbacks, 4000);
   return () => {
     active = false;
     clearInterval(interval);
+    if (unsubscribeFirestore) {
+      unsubscribeFirestore();
+    }
   };
 }
 

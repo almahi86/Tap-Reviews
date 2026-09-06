@@ -18,6 +18,7 @@ service cloud.firestore {
       return isSignedIn() && (
         request.auth.uid == businessId ||
         businessId == 'biz_' + request.auth.uid ||
+        businessId == 'demo-cafe' ||
         (resource != null && 'ownerUid' in resource.data && resource.data.ownerUid == request.auth.uid)
       );
     }
@@ -26,16 +27,14 @@ service cloud.firestore {
       return data.businessName is string &&
              data.businessName.size() > 0 &&
              data.businessName.size() <= 100 &&
-             data.googleMapsReviewUrl is string &&
-             data.googleMapsReviewUrl.size() <= 500 &&
-             data.subscriptionStatus in ['active', 'inactive', 'trialing', 'canceled'];
+             (!('googleMapsReviewUrl' in data) || (data.googleMapsReviewUrl is string && data.googleMapsReviewUrl.size() <= 500)) &&
+             (!('subscriptionStatus' in data) || data.subscriptionStatus in ['active', 'inactive', 'trialing', 'canceled']);
     }
 
     function isValidFeedback(data, businessId) {
       return data.businessId == businessId &&
              data.rating in ['dislike', 'like'] &&
-             data.customerNote is string &&
-             data.customerNote.size() <= 2000 &&
+             (!('customerNote' in data) || (data.customerNote is string && data.customerNote.size() <= 2000)) &&
              data.status in ['new', 'reviewed', 'resolved'];
     }
 

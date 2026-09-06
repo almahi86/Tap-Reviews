@@ -751,8 +751,12 @@ export function LandingPage({
           if (previewCode && onPreviewCodeReceived) {
             onPreviewCodeReceived(previewCode);
           }
-          // Proceed to guarded dashboard view
-          onEnterDashboard();
+          // Direct user to pay first if they do not yet have an active subscription
+          if (!isSubscribed) {
+            onSubscribe(billingCycle);
+          } else {
+            onEnterDashboard();
+          }
         }}
       />
     </div>

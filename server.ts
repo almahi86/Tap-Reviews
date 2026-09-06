@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import dotenv from "dotenv";
@@ -9,6 +10,16 @@ dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+// Enable CORS for all origins and headers so client/preview can seamlessly communicate
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+  })
+);
 
 app.use(express.json());
 
@@ -121,9 +132,12 @@ const fallbackFeedbacks: StoredFeedback[] = [
 
 // Health API
 app.get("/api/health", (_req, res) => {
+  const pubKey = process.env.STRIPE_PUBLISHABLE_KEY || process.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
   res.json({
     status: "ok",
     hasStripeKey: Boolean(process.env.STRIPE_SECRET_KEY),
+    hasStripePublishableKey: Boolean(pubKey),
+    publishableKey: pubKey || undefined,
     hasSmtpConfig: Boolean(process.env.SMTP_USER && process.env.SMTP_PASS),
     timestamp: new Date().toISOString(),
   });
@@ -279,43 +293,99 @@ app.get("/api/auth/verification-status", (req, res) => {
   res.json({ emailVerified: isVerified });
 });
 
-// 3. Create Stripe Subscription Checkout (Instantiates Stripe, fetches/creates Customer ID, sets mode: 'subscription')
+// Register Google session and guarantee verified status in server store
+app.post("/api/auth/google-session", (req, res) => {
+  const { email, displayName, uid } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+  const normalizedEmail = email.trim().toLowerCase();
+  memoryVerifiedEmails[normalizedEmail] = true;
+  if (uid) {
+    memoryVerifiedEmails[uid] = true;
+  }
+  console.log(`[AUTH] Google session registered for ${normalizedEmail} (uid: ${uid || "none"})`);
+  res.json({ success: true, emailVerified: true });
+});
+
+// 3. Create Stripe Subscription Checkout (Supports Embedded Checkout with ui_mode: 'embedded')
 app.post(["/api/create-subscription-checkout", "/api/create-checkout-session"], async (req, res) => {
   try {
     const { businessId, businessName, email, returnUrl, planInterval, userId } = req.body;
+    console.log("[Stripe Checkout API] Request received:", {
+      businessId,
+      businessName,
+      email,
+      returnUrl,
+      planInterval,
+      userId,
+      hasStripeKey: Boolean(process.env.STRIPE_SECRET_KEY),
+    });
+
     const stripe = getStripe();
     const interval = planInterval === "year" ? "year" : "month";
     const amount = interval === "year" ? 19999 : 2499; // $199.99/yr or $24.99/mo
 
     const origin = req.headers.origin || `http://localhost:${PORT}`;
-    const baseUrl = returnUrl || origin;
+    const defaultReturnUrl = `${origin}/return?session_id={CHECKOUT_SESSION_ID}&business_id=${encodeURIComponent(
+      businessId || ""
+    )}`;
+    const effectiveReturnUrl = returnUrl ? returnUrl : defaultReturnUrl;
+
+    // Cache or initialize business record with the provided businessName
+    if (businessId && businessName) {
+      if (fallbackBusinesses[businessId]) {
+        fallbackBusinesses[businessId].businessName = businessName;
+      } else {
+        fallbackBusinesses[businessId] = {
+          id: businessId,
+          ownerUid: userId || `owner_${businessId}`,
+          businessName: businessName,
+          googleMapsReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+          subscriptionStatus: "inactive",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    }
 
     if (!stripe) {
       // Mock / Preview Mode when Stripe Secret is not configured in .env
       const mockSessionId = `test_sess_${Date.now()}`;
+      const previewUrl = `/return?session_id=${mockSessionId}&subscribed=true&plan=${interval}&business_id=${encodeURIComponent(
+        businessId || "demo-cafe"
+      )}`;
+      console.log("[Stripe Checkout API] No Stripe secret configured, serving sandbox checkout:", previewUrl);
       return res.json({
         mode: "demo",
         message: "Stripe API Key not configured in .env. Falling back to sandbox checkout.",
         sessionId: mockSessionId,
-        checkoutUrl: `${baseUrl}?session_id=${mockSessionId}&subscribed=true&plan=${interval}&business_id=${encodeURIComponent(
-          businessId || "demo-cafe"
-        )}`,
+        clientSecret: `${mockSessionId}_secret_demo`,
+        client_secret: `${mockSessionId}_secret_demo`,
+        publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || process.env.VITE_STRIPE_PUBLISHABLE_KEY || "",
+        url: previewUrl,
+        checkoutUrl: previewUrl,
       });
     }
 
     // Fetch or create Stripe Customer ID for this user
     let customerId = email ? memoryStripeCustomers[email.toLowerCase()] : undefined;
     if (!customerId && email) {
-      const customer = await stripe.customers.create({
-        email,
-        name: businessName || undefined,
-        metadata: {
-          firebaseUid: userId || businessId || "",
-          businessId: businessId || "",
-        },
-      });
-      customerId = customer.id;
-      memoryStripeCustomers[email.toLowerCase()] = customerId;
+      try {
+        console.log("[Stripe Checkout API] Creating Stripe customer for:", email);
+        const customer = await stripe.customers.create({
+          email,
+          name: businessName || undefined,
+          metadata: {
+            firebaseUid: userId || businessId || "",
+            businessId: businessId || "",
+          },
+        });
+        customerId = customer.id;
+        memoryStripeCustomers[email.toLowerCase()] = customerId;
+      } catch (custErr: any) {
+        console.warn("[Stripe Checkout API] Non-fatal customer creation error:", custErr?.message);
+      }
     }
 
     const priceId =
@@ -323,8 +393,7 @@ app.post(["/api/create-subscription-checkout", "/api/create-checkout-session"], 
         ? process.env.STRIPE_YEARLY_PRICE_ID
         : (process.env.STRIPE_MONTHLY_PRICE_ID || process.env.STRIPE_PRICE_ID);
 
-    // Use price ID if configured, or create an ad-hoc subscription line item
-    const lineItem = priceId
+    const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = priceId
       ? { price: priceId, quantity: 1 }
       : {
           price_data: {
@@ -332,6 +401,7 @@ app.post(["/api/create-subscription-checkout", "/api/create-checkout-session"], 
             product_data: {
               name: `TapShield Pro (${interval === "year" ? "Annual" : "Monthly"})`,
               description: `NFC negative feedback recovery & Google review booster for ${businessName || "Your Business"} (${interval === "year" ? "$199.99/year" : "$24.99/month"})`,
+              tax_code: "txcd_10000000",
             },
             unit_amount: amount,
             recurring: { interval: interval as "month" | "year" },
@@ -339,13 +409,15 @@ app.post(["/api/create-subscription-checkout", "/api/create-checkout-session"], 
           quantity: 1,
         };
 
+    console.log("[Stripe Checkout API] Creating embedded checkout session with interval:", interval, "amount:", amount);
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
+      ui_mode: "embedded",
       mode: "subscription",
       customer: customerId,
       customer_email: customerId ? undefined : (email || undefined),
       client_reference_id: businessId,
       line_items: [lineItem],
+      managed_payments: { enabled: false },
       metadata: {
         firebaseUid: userId || "",
         businessId: businessId || "",
@@ -358,21 +430,66 @@ app.post(["/api/create-subscription-checkout", "/api/create-checkout-session"], 
           businessId: businessId || "",
         },
       },
-      success_url: `${baseUrl}?session_id={CHECKOUT_SESSION_ID}&subscribed=true&plan=${interval}&business_id=${encodeURIComponent(
-        businessId || ""
-      )}`,
-      cancel_url: `${baseUrl}?canceled=true&business_id=${encodeURIComponent(businessId || "")}`,
+      return_url: effectiveReturnUrl,
     });
 
-    res.json({
+    console.log("[Stripe Checkout API] Embedded checkout session created successfully:", session.id);
+    return res.json({
       mode: "live_stripe",
       sessionId: session.id,
-      checkoutUrl: session.url,
+      clientSecret: session.client_secret,
+      client_secret: session.client_secret,
+      publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || process.env.VITE_STRIPE_PUBLISHABLE_KEY || "",
       customerId: customerId || session.customer,
+      url: session.url,
+      checkoutUrl: session.url,
     });
   } catch (error: any) {
-    console.error("Error creating Stripe checkout session:", error);
-    res.status(500).json({ error: error?.message || "Failed to create checkout session" });
+    console.error("[Stripe Checkout API Error]:", error);
+    return res.status(500).json({
+      error: error?.message || "Failed to create checkout session",
+      code: error?.code,
+      type: error?.type,
+    });
+  }
+});
+
+// Verify Checkout Session or retrieve session status
+app.get("/api/session-status", async (req, res) => {
+  try {
+    const sessionId = (req.query.session_id as string) || (req.query.sessionId as string);
+    if (!sessionId) {
+      return res.status(400).json({ error: "session_id query parameter is required" });
+    }
+
+    if (sessionId.startsWith("test_sess_")) {
+      return res.json({
+        status: "complete",
+        payment_status: "paid",
+        customer_email: "demo@example.com",
+        mode: "demo",
+      });
+    }
+
+    const stripe = getStripe();
+    if (!stripe) {
+      return res.json({
+        status: "complete",
+        payment_status: "paid",
+        customer_email: "preview@example.com",
+        mode: "demo_fallback",
+      });
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    return res.json({
+      status: session.status,
+      payment_status: session.payment_status,
+      customer_email: session.customer_details?.email,
+    });
+  } catch (err: any) {
+    console.error("Error retrieving session status:", err);
+    return res.status(500).json({ error: err?.message || "Failed to retrieve session status" });
   }
 });
 
@@ -387,6 +504,7 @@ app.post("/api/verify-checkout-session", async (req, res) => {
     if (sessionId.startsWith("test_sess_")) {
       if (businessId && fallbackBusinesses[businessId]) {
         fallbackBusinesses[businessId].subscriptionStatus = "active";
+        fallbackBusinesses[businessId].updatedAt = new Date().toISOString() + "_paid_verified";
       }
       return res.json({
         verified: true,
@@ -405,6 +523,7 @@ app.post("/api/verify-checkout-session", async (req, res) => {
 
     if (isPaid && businessId && fallbackBusinesses[businessId]) {
       fallbackBusinesses[businessId].subscriptionStatus = "active";
+      fallbackBusinesses[businessId].updatedAt = new Date().toISOString() + "_paid_verified";
     }
 
     res.json({
@@ -422,20 +541,25 @@ app.post("/api/verify-checkout-session", async (req, res) => {
 // Business Profile API (Used by Public NFC Rate screen & Dashboard fallback)
 app.get("/api/businesses/:businessId", (req, res) => {
   const { businessId } = req.params;
+  const isDemo = businessId === "demo-cafe";
   const business = fallbackBusinesses[businessId];
   if (!business) {
-    // Generate a starter business record if accessing a new ID in demo mode
+    // Generate a starter business record: demo-cafe is active, real user stores are inactive until paid
     const newBiz: StoredBusiness = {
       id: businessId,
       ownerUid: `owner_${businessId}`,
-      businessName: businessId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-      googleMapsReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
-      subscriptionStatus: "active",
+      businessName: isDemo ? "Artisan Brews & Roastery" : "My Store",
+      googleMapsReviewUrl: isDemo ? "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4" : "",
+      subscriptionStatus: isDemo ? "active" : "inactive",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     fallbackBusinesses[businessId] = newBiz;
     return res.json(newBiz);
+  }
+  // Only demo-cafe is active by default. Ensure unverified user accounts remain inactive until payment completes
+  if (!isDemo && business.subscriptionStatus === "active" && !business.updatedAt?.includes("paid_verified")) {
+    business.subscriptionStatus = "inactive";
   }
   res.json(business);
 });

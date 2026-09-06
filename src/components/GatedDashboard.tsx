@@ -19,6 +19,7 @@ import {
   User,
   ArrowRight,
   TrendingUp,
+  Store,
 } from "lucide-react";
 import { motion } from "motion/react";
 import {
@@ -30,9 +31,13 @@ import {
   signInWithGoogle,
   isFirebaseConfigured,
 } from "../lib/firebase";
-import { triggerStripeSubscriptionCheckout } from "../lib/auth-service";
+import {
+  createEmbeddedCheckoutSession,
+  triggerStripeSubscriptionCheckout,
+} from "../lib/auth-service";
 import type { Business, FeedbackItem, AuthUserProfile } from "../types";
 import { WeeklyAnalyticsChart } from "./WeeklyAnalyticsChart";
+import { StripeEmbeddedCheckoutModal } from "./StripeEmbeddedCheckout";
 
 interface GatedDashboardProps {
   currentUser: AuthUserProfile | null;
@@ -63,7 +68,13 @@ export function GatedDashboard({
   // Stripe checkout state
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [directCheckoutUrl, setDirectCheckoutUrl] = useState<string | null>(null);
   const [paywallBillingCycle, setPaywallBillingCycle] = useState<"month" | "year">("year");
+  const [embeddedSession, setEmbeddedSession] = useState<{
+    clientSecret: string;
+    sessionId: string;
+    publishableKey?: string;
+  } | null>(null);
 
   // Feedback filter
   const [statusFilter, setStatusFilter] = useState<"all" | "new" | "reviewed" | "resolved">("all");
@@ -91,11 +102,13 @@ export function GatedDashboard({
         }
 
         // Only subscribe to feedbacks if active subscriber or demo owner
-        unsubscribeFeedbacks = subscribeToFeedbacks(effectiveBusinessId, (data) => {
-          if (isMounted) {
-            setFeedbacks(data);
-          }
-        });
+        if (biz.subscriptionStatus === "active" || effectiveBusinessId === "demo-cafe") {
+          unsubscribeFeedbacks = subscribeToFeedbacks(effectiveBusinessId, (data) => {
+            if (isMounted) {
+              setFeedbacks(data);
+            }
+          });
+        }
       } catch (err) {
         console.error("Failed to load business data:", err);
       } finally {
@@ -115,9 +128,9 @@ export function GatedDashboard({
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const sessionId = urlParams.get("session_id");
-    const isSubscribed = urlParams.get("subscribed") === "true";
+    const isSubscribedParam = urlParams.get("subscribed") === "true";
 
-    if (sessionId || isSubscribed) {
+    if (sessionId || isSubscribedParam) {
       // Confirm subscription
       verifyStripeSession(sessionId || "test_sess_return");
     }
@@ -147,19 +160,52 @@ export function GatedDashboard({
 
   // Trigger Stripe Checkout flow
   const handleStartStripeCheckout = async (intervalToUse?: "month" | "year") => {
+    const trimmedName = businessName.trim();
+    if (!trimmedName) {
+      setCheckoutError("Please enter your business name so it appears on your customer rating view page.");
+      return;
+    }
+
     setIsCheckingOut(true);
     setCheckoutError(null);
+    setDirectCheckoutUrl(null);
     try {
       const interval = intervalToUse || paywallBillingCycle;
-      await triggerStripeSubscriptionCheckout({
+
+      // Save business name to Firestore and local state, keeping subscriptionStatus inactive until payment completes
+      const updated: Business = {
+        id: effectiveBusinessId,
+        ownerUid: currentUser?.uid || `owner_${effectiveBusinessId}`,
+        businessName: trimmedName,
+        googleMapsReviewUrl: googleMapsUrl.trim(),
+        subscriptionStatus: business?.subscriptionStatus === "active" ? "active" : "inactive",
+        createdAt: business?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setBusiness(updated);
+      await saveBusinessProfile(updated);
+
+      const session = await createEmbeddedCheckoutSession({
         businessId: effectiveBusinessId,
-        businessName: businessName || "My Business",
+        businessName: trimmedName,
         planInterval: interval,
         user: currentUser,
       });
+
+      if (session?.clientSecret) {
+        setEmbeddedSession({
+          clientSecret: session.clientSecret,
+          sessionId: session.sessionId,
+          publishableKey: session.publishableKey,
+        });
+      }
     } catch (err: any) {
       console.error("Stripe checkout trigger error:", err);
-      setCheckoutError(err?.message || "Failed to launch Stripe Checkout");
+      const errorMsg = err?.message || "Failed to connect to checkout";
+      setCheckoutError(errorMsg);
+      setIsCheckingOut(false);
+      setLoading(false);
+      window.alert(errorMsg);
     } finally {
       setIsCheckingOut(false);
     }
@@ -448,9 +494,52 @@ export function GatedDashboard({
                     </li>
                   </ul>
 
+                  {/* Business Name Prompt for Subscription Signup */}
+                  <div className="space-y-1.5 pt-3 border-t border-white/10">
+                    <label
+                      htmlFor="paywall-business-name-input"
+                      className="block text-xs font-black uppercase tracking-wider text-stone-200"
+                    >
+                      Your Business Name <span className="text-emerald-400">*</span>
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
+                        <Store className="w-4 h-4" />
+                      </div>
+                      <input
+                        id="paywall-business-name-input"
+                        type="text"
+                        required
+                        value={businessName}
+                        onChange={(e) => setBusinessName(e.target.value)}
+                        placeholder="e.g. Downtown Artisan Cafe"
+                        className="w-full pl-9 pr-3 py-2.5 bg-[#141414] border border-white/20 focus:border-emerald-500 rounded-lg text-xs font-semibold text-white placeholder:text-stone-500 outline-none transition"
+                      />
+                    </div>
+                    <p className="text-[11px] text-stone-400 leading-tight">
+                      This business name will appear at the top of your customer NFC tap & QR rating page.
+                    </p>
+                  </div>
+
                   {checkoutError && (
                     <div className="p-3 rounded-lg bg-rose-500/10 text-rose-300 text-xs border border-rose-500/30">
                       {checkoutError}
+                    </div>
+                  )}
+
+                  {directCheckoutUrl && (
+                    <div className="p-3.5 rounded-lg bg-emerald-500/10 text-emerald-300 text-xs border border-emerald-500/30 space-y-2.5 text-center">
+                      <p className="font-semibold text-white">Stripe Checkout Session Created</p>
+                      <p className="text-[11px] text-stone-300">If your browser or iframe blocked the automated redirect, click below to proceed:</p>
+                      <a
+                        href={directCheckoutUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs rounded transition shadow-md w-full"
+                      >
+                        <span>Open Secure Stripe Checkout</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </a>
                     </div>
                   )}
 
@@ -477,18 +566,6 @@ export function GatedDashboard({
                     )}
                   </button>
                 </div>
-              </div>
-
-              {/* Developer / Sandbox instant bypass */}
-              <div className="pt-2 border-t border-white/10 max-w-md mx-auto flex items-center justify-between text-xs text-stone-400">
-                <span>Want to test the dashboard?</span>
-                <button
-                  id="btn-bypass-subscription"
-                  onClick={handleToggleSandboxSubscription}
-                  className="text-emerald-400 hover:text-emerald-300 font-bold uppercase tracking-wider underline cursor-pointer"
-                >
-                  Open Demo Dashboard
-                </button>
               </div>
             </div>
           </div>
@@ -894,6 +971,27 @@ export function GatedDashboard({
           </div>
         )}
       </main>
+
+      {/* Stripe Embedded Checkout Modal */}
+      {embeddedSession && (
+        <StripeEmbeddedCheckoutModal
+          clientSecret={embeddedSession.clientSecret}
+          sessionId={embeddedSession.sessionId}
+          publishableKey={embeddedSession.publishableKey}
+          businessName={businessName || business?.businessName}
+          onClose={() => setEmbeddedSession(null)}
+          onComplete={async () => {
+            setEmbeddedSession(null);
+            if (business) {
+              const updated = { ...business, subscriptionStatus: "active" as const };
+              setBusiness(updated);
+              await saveBusinessProfile(updated);
+            }
+            setSaveSuccessMessage("🎉 Subscription activated successfully! Welcome to TapShield Pro.");
+            setTimeout(() => setSaveSuccessMessage(null), 6000);
+          }}
+        />
+      )}
     </div>
   );
 }

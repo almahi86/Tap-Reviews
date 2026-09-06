@@ -4,8 +4,12 @@ import { GatedDashboard } from "./components/GatedDashboard";
 import { LandingPage } from "./components/LandingPage";
 import { EmailVerificationScreen } from "./components/EmailVerificationScreen";
 import { AuthModal } from "./components/AuthModal";
+import { SubscriptionModal } from "./components/SubscriptionModal";
+import { StripeEmbeddedCheckoutModal } from "./components/StripeEmbeddedCheckout";
+import { ReturnPage } from "./components/ReturnPage";
 import { auth, fetchBusiness, saveBusinessProfile, signOutUser } from "./lib/firebase";
 import {
+  createEmbeddedCheckoutSession,
   triggerStripeSubscriptionCheckout,
   checkEmailVerificationStatus,
   getStoredAuthSession,
@@ -28,9 +32,15 @@ import {
 
 export default function App() {
   // Parse URL on initial load to determine route
-  const getInitialRoute = (): { view: "landing" | "dashboard" | "rate"; businessId: string } => {
+  const getInitialRoute = (): { view: "landing" | "dashboard" | "rate" | "return"; businessId: string } => {
     const path = window.location.pathname;
     const searchParams = new URLSearchParams(window.location.search);
+
+    // Return page for Stripe Embedded Checkout
+    if (path.startsWith("/return") || searchParams.has("session_id")) {
+      const bizId = searchParams.get("business_id") || "demo-cafe";
+      return { view: "return", businessId: bizId };
+    }
 
     // Matches /rate/:businessId or query params ?rate=... / ?business_id=...
     const ratePathMatch = path.match(/^\/rate\/([^/]+)/);
@@ -44,10 +54,9 @@ export default function App() {
     }
 
     // Stripe checkout return or explicit dashboard view
-    const sessionId = searchParams.get("session_id");
     const isSubscribedParam = searchParams.get("subscribed") === "true";
     const viewParam = searchParams.get("view");
-    if (sessionId || isSubscribedParam || viewParam === "dashboard") {
+    if (isSubscribedParam || viewParam === "dashboard") {
       return { view: "dashboard", businessId: "demo-cafe" };
     }
 
@@ -56,7 +65,7 @@ export default function App() {
   };
 
   const initial = getInitialRoute();
-  const [currentView, setCurrentView] = useState<"landing" | "dashboard" | "rate">(initial.view);
+  const [currentView, setCurrentView] = useState<"landing" | "dashboard" | "rate" | "return">(initial.view);
   const [activeBusinessId, setActiveBusinessId] = useState<string>(initial.businessId);
 
   // Authenticated user profile: starts as null (no automatic demo account)
@@ -66,8 +75,20 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [activePreviewCode, setActivePreviewCode] = useState<string | undefined>(undefined);
 
-  // Subscription state: tracks if business owner has active access
-  const [isSubscribed, setIsSubscribed] = useState<boolean>(true);
+  // Subscription modal control (prompts for business name before checkout)
+  const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+  const [subscriptionPlan, setSubscriptionPlan] = useState<"month" | "year">("year");
+  const [currentBusinessName, setCurrentBusinessName] = useState<string>("");
+
+  // Embedded Stripe checkout modal state
+  const [embeddedSession, setEmbeddedSession] = useState<{
+    clientSecret: string;
+    sessionId: string;
+    publishableKey?: string;
+  } | null>(null);
+
+  // Subscription state: tracks if business owner has active access (false by default for new accounts)
+  const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
   const [isCheckingOut, setIsCheckingOut] = useState<boolean>(false);
 
   // Check stored auth session expiration on app launch
@@ -82,16 +103,22 @@ export default function App() {
     }
   }, []);
 
-  // Sync business subscription status
+  // Sync business subscription status and business name
   useEffect(() => {
     async function loadSubStatus() {
       try {
         const biz = await fetchBusiness(activeBusinessId);
         if (biz) {
           setIsSubscribed(biz.subscriptionStatus === "active");
+          if (biz.businessName) {
+            setCurrentBusinessName(biz.businessName);
+          }
+        } else {
+          setIsSubscribed(activeBusinessId === "demo-cafe");
         }
       } catch (err) {
         console.warn("Could not load initial business profile:", err);
+        setIsSubscribed(activeBusinessId === "demo-cafe");
       }
     }
     loadSubStatus();
@@ -103,6 +130,22 @@ export default function App() {
     if (searchParams.get("session_id") || searchParams.get("subscribed") === "true") {
       setIsSubscribed(true);
       setCurrentView("dashboard");
+    }
+  }, []);
+
+  // Check and restore active 7-day session on mount
+  useEffect(() => {
+    const session = getStoredAuthSession();
+    if (session && Date.now() <= session.expiresAt && session.uid) {
+      const restoredUser: AuthUserProfile = {
+        uid: session.uid,
+        email: session.email,
+        displayName: session.displayName,
+        emailVerified: true,
+        isDemo: false,
+      };
+      setCurrentUser(restoredUser);
+      setActiveBusinessId(session.uid);
     }
   }, []);
 
@@ -121,8 +164,13 @@ export default function App() {
             return;
           }
 
-          let verified = user.emailVerified;
-          // Check backend OTP verification store if client auth has false
+          const isGoogleUser =
+            user.providerData?.some((p) => p.providerId === "google.com") ||
+            user.uid.startsWith("google_") ||
+            Boolean(session?.email);
+
+          let verified = isGoogleUser || user.emailVerified;
+          // Check backend verification store if not verified yet
           if (!verified && user.email) {
             try {
               verified = await checkEmailVerificationStatus(user.email, user.uid);
@@ -147,39 +195,76 @@ export default function App() {
           setCurrentUser(profile);
           setActiveBusinessId(user.uid);
         } else {
-          clearAuthSession();
-          setCurrentUser(null);
+          // Check if we have an active valid stored session (e.g. Google preview auth)
+          const session = getStoredAuthSession();
+          if (session && Date.now() <= session.expiresAt && session.uid) {
+            const restoredUser: AuthUserProfile = {
+              uid: session.uid,
+              email: session.email,
+              displayName: session.displayName,
+              emailVerified: true,
+              isDemo: false,
+            };
+            setCurrentUser(restoredUser);
+            setActiveBusinessId(session.uid);
+          } else {
+            clearAuthSession();
+            setCurrentUser(null);
+          }
         }
       });
       return () => unsubscribe();
     }
   }, []);
 
-  // Handle Stripe Subscription checkout from Landing page or Dashboard
+  // Handle subscription initiation from Landing page or Dashboard: Opens Subscription Modal to capture business name
   const handleSubscribe = async (interval: "month" | "year") => {
-    if (!currentUser) {
-      setIsAuthModalOpen(true);
-      return;
-    }
+    setSubscriptionPlan(interval);
+    setIsSubscriptionModalOpen(true);
+  };
 
-    if (!currentUser.emailVerified) {
-      // Actively guard: route to verification screen
-      setCurrentView("dashboard");
-      return;
-    }
-
+  // Called when business confirms their name and selected plan
+  const handleConfirmSubscription = async ({
+    businessName,
+    interval,
+  }: {
+    businessName: string;
+    interval: "month" | "year";
+  }) => {
     setIsCheckingOut(true);
     try {
-      await triggerStripeSubscriptionCheckout({
-        businessId: activeBusinessId,
-        businessName: "Downtown Artisan Cafe",
+      const trimmedName = businessName.trim();
+      const bizId = currentUser ? currentUser.uid : activeBusinessId;
+      setActiveBusinessId(bizId);
+      setCurrentBusinessName(trimmedName);
+
+      // Save business name to Firestore and local API as inactive until paid
+      await saveBusinessProfile({
+        id: bizId,
+        businessName: trimmedName,
+        subscriptionStatus: "inactive",
+      });
+
+      const session = await createEmbeddedCheckoutSession({
+        businessId: bizId,
+        businessName: trimmedName,
         planInterval: interval,
         user: currentUser,
       });
-    } catch (err) {
+
+      if (session?.clientSecret) {
+        setEmbeddedSession({
+          clientSecret: session.clientSecret,
+          sessionId: session.sessionId,
+          publishableKey: session.publishableKey,
+        });
+      }
+    } catch (err: any) {
       console.error("Subscription checkout error:", err);
-      // Fallback sandbox activation to never block the reviewer
-      setIsSubscribed(true);
+      setIsCheckingOut(false);
+      const errorMsg = err?.message || "Failed to connect to checkout";
+      window.alert(errorMsg);
+      // Keep view on dashboard so user can review the payment gate and retry
       setCurrentView("dashboard");
     } finally {
       setIsCheckingOut(false);
@@ -257,7 +342,7 @@ export default function App() {
             }`}
           >
             <Smartphone className="w-3.5 h-3.5" />
-            <span>Customer View</span>
+            <span>Customer View{currentBusinessName ? ` • ${currentBusinessName}` : ""}</span>
           </button>
         </div>
 
@@ -375,6 +460,19 @@ export default function App() {
           )
         )}
 
+        {currentView === "return" && (
+          <ReturnPage
+            onGoToDashboard={() => {
+              setIsSubscribed(true);
+              setCurrentView("dashboard");
+            }}
+            onGoToRating={(bizId) => {
+              setActiveBusinessId(bizId);
+              setCurrentView("rate");
+            }}
+          />
+        )}
+
         {currentView === "rate" && (
           <NfcRatingPage
             businessId={activeBusinessId}
@@ -383,17 +481,102 @@ export default function App() {
         )}
       </main>
 
+      {/* Global Embedded Stripe Checkout Modal */}
+      {embeddedSession && (
+        <StripeEmbeddedCheckoutModal
+          clientSecret={embeddedSession.clientSecret}
+          sessionId={embeddedSession.sessionId}
+          publishableKey={embeddedSession.publishableKey}
+          businessName={currentBusinessName}
+          onClose={() => setEmbeddedSession(null)}
+          onComplete={async () => {
+            setEmbeddedSession(null);
+            setIsSubscribed(true);
+            const bizId = currentUser ? currentUser.uid : activeBusinessId;
+            try {
+              await saveBusinessProfile({
+                id: bizId,
+                businessName: currentBusinessName || "My Business",
+                subscriptionStatus: "active",
+              });
+            } catch (err) {
+              console.warn("Could not activate subscription locally:", err);
+            }
+            setCurrentView("dashboard");
+          }}
+        />
+      )}
+
       {/* Global Senior Firebase Auth Modal */}
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
-        onAuthSuccess={(user, previewCode) => {
+        onAuthSuccess={async (user, previewCode, businessName) => {
           setCurrentUser(user);
+          setActiveBusinessId(user.uid);
           if (previewCode) {
             setActivePreviewCode(previewCode);
           }
-          // Navigate to dashboard (which will actively guard if unverified, or open if verified)
+          if (businessName) {
+            setCurrentBusinessName(businessName);
+            try {
+              await saveBusinessProfile({
+                id: user.uid,
+                businessName,
+                subscriptionStatus: "inactive",
+              });
+            } catch (err) {
+              console.warn("Could not save initial business name:", err);
+            }
+          }
+
+          // Verify if this account already has an active paid subscription
+          let hasActiveSubscription = false;
+          try {
+            const biz = await fetchBusiness(user.uid);
+            hasActiveSubscription = biz?.subscriptionStatus === "active";
+          } catch {
+            hasActiveSubscription = false;
+          }
+
+          setIsSubscribed(hasActiveSubscription);
+
+          // If not paid, user must pay first: trigger the subscription payment modal
+          if (!hasActiveSubscription) {
+            setIsSubscriptionModalOpen(true);
+          }
+
+          // Navigate to dashboard (which renders the subscription paywall if inactive)
           setCurrentView("dashboard");
+        }}
+      />
+
+      {/* Subscription Signup Modal (prompts for business name before checkout) */}
+      <SubscriptionModal
+        isOpen={isSubscriptionModalOpen}
+        onClose={() => setIsSubscriptionModalOpen(false)}
+        currentUser={currentUser}
+        initialPlan={subscriptionPlan}
+        initialBusinessName={currentBusinessName}
+        onConfirmSubscription={handleConfirmSubscription}
+        onAuthSuccess={async (user, previewCode, businessName) => {
+          setCurrentUser(user);
+          setActiveBusinessId(user.uid);
+          if (previewCode) {
+            setActivePreviewCode(previewCode);
+          }
+          if (businessName) {
+            setCurrentBusinessName(businessName);
+            try {
+              await saveBusinessProfile({
+                id: user.uid,
+                businessName,
+                subscriptionStatus: "inactive",
+              });
+            } catch (err) {
+              console.warn("Could not save initial business name on subscription auth:", err);
+            }
+          }
         }}
       />
     </div>

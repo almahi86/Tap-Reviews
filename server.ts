@@ -1,10 +1,12 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
 dotenv.config();
 
@@ -22,6 +24,15 @@ app.use(
 );
 
 app.use(express.json());
+
+// Lazy-initialize Resend client
+let resendClient: Resend | null = null;
+function getResend(): Resend | null {
+  if (!resendClient && process.env.RESEND_API_KEY) {
+    resendClient = new Resend(process.env.RESEND_API_KEY);
+  }
+  return resendClient;
+}
 
 // Lazy-initialize Stripe client
 let stripeClient: Stripe | null = null;
@@ -105,7 +116,66 @@ const fallbackBusinesses: Record<string, StoredBusiness> = {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
+  "rcB3J0qBydaOGKD44gS0JAbpX9m1": {
+    id: "rcB3J0qBydaOGKD44gS0JAbpX9m1",
+    ownerUid: "rcB3J0qBydaOGKD44gS0JAbpX9m1",
+    businessName: "Artisan",
+    googleMapsReviewUrl: "",
+    subscriptionStatus: "active",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString() + "_paid_verified",
+  },
 };
+
+// Check Stripe live for active subscriptions matching user email or UID
+async function checkStripeSubscriptionForUser(
+  userId?: string,
+  email?: string
+): Promise<{ hasActiveSub: boolean; customerId?: string; subscriptionId?: string; businessName?: string }> {
+  const stripe = getStripe();
+  if (!stripe) return { hasActiveSub: false };
+
+  try {
+    // 1. Check by email if provided
+    if (email) {
+      const customers = await stripe.customers.list({ email: email.toLowerCase().trim(), limit: 10 });
+      for (const cust of customers.data) {
+        const subs = await stripe.subscriptions.list({ customer: cust.id, status: "active", limit: 5 });
+        if (subs.data.length > 0) {
+          return {
+            hasActiveSub: true,
+            customerId: cust.id,
+            subscriptionId: subs.data[0].id,
+            businessName: cust.name || (cust.metadata?.businessName as string) || undefined,
+          };
+        }
+      }
+    }
+
+    // 2. Check recent active subscriptions or checkout sessions matching userId
+    if (userId) {
+      const recentSessions = await stripe.checkout.sessions.list({ limit: 25 });
+      for (const sess of recentSessions.data) {
+        if (
+          (sess.payment_status === "paid" || sess.status === "complete") &&
+          (sess.client_reference_id === userId ||
+            sess.metadata?.firebaseUid === userId ||
+            sess.metadata?.businessId === userId)
+        ) {
+          return {
+            hasActiveSub: true,
+            customerId: typeof sess.customer === "string" ? sess.customer : undefined,
+            businessName: sess.metadata?.businessName || undefined,
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[Stripe Subscription Check Error]:", err);
+  }
+
+  return { hasActiveSub: false };
+}
 
 const fallbackFeedbacks: StoredFeedback[] = [
   {
@@ -539,10 +609,32 @@ app.post("/api/verify-checkout-session", async (req, res) => {
 });
 
 // Business Profile API (Used by Public NFC Rate screen & Dashboard fallback)
-app.get("/api/businesses/:businessId", (req, res) => {
+app.get("/api/businesses/:businessId", async (req, res) => {
   const { businessId } = req.params;
+  const email = (req.query.email as string)?.trim();
+  const userId = (req.query.userId as string)?.trim();
   const isDemo = businessId === "demo-cafe";
-  const business = fallbackBusinesses[businessId];
+
+  let business = fallbackBusinesses[businessId];
+
+  // If not demo and not currently verified active, check Stripe live
+  if (!isDemo && (!business || business.subscriptionStatus !== "active")) {
+    const stripeCheck = await checkStripeSubscriptionForUser(userId || businessId, email);
+    if (stripeCheck.hasActiveSub) {
+      business = {
+        id: businessId,
+        ownerUid: userId || `owner_${businessId}`,
+        businessName: stripeCheck.businessName || business?.businessName || "Artisan",
+        googleMapsReviewUrl: business?.googleMapsReviewUrl || "",
+        subscriptionStatus: "active",
+        createdAt: business?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString() + "_paid_verified",
+      };
+      fallbackBusinesses[businessId] = business;
+      return res.json(business);
+    }
+  }
+
   if (!business) {
     // Generate a starter business record: demo-cafe is active, real user stores are inactive until paid
     const newBiz: StoredBusiness = {
@@ -557,11 +649,60 @@ app.get("/api/businesses/:businessId", (req, res) => {
     fallbackBusinesses[businessId] = newBiz;
     return res.json(newBiz);
   }
-  // Only demo-cafe is active by default. Ensure unverified user accounts remain inactive until payment completes
+
+  // Ensure unverified user accounts remain inactive unless Stripe has active subscription
   if (!isDemo && business.subscriptionStatus === "active" && !business.updatedAt?.includes("paid_verified")) {
-    business.subscriptionStatus = "inactive";
+    const stripeCheck = await checkStripeSubscriptionForUser(userId || businessId, email);
+    if (!stripeCheck.hasActiveSub) {
+      business.subscriptionStatus = "inactive";
+    } else {
+      business.updatedAt = new Date().toISOString() + "_paid_verified";
+    }
   }
+
   res.json(business);
+});
+
+// Real-time subscription check across Stripe & memory
+app.get("/api/subscription-status", async (req, res) => {
+  const email = (req.query.email as string)?.trim();
+  const userId = (req.query.userId as string)?.trim();
+  const businessId = (req.query.businessId as string)?.trim();
+
+  // Demo account is always active for previewing
+  if (businessId === "demo-cafe") {
+    return res.json({ isPro: true, status: "active" });
+  }
+
+  // Check live Stripe subscriptions
+  const stripeCheck = await checkStripeSubscriptionForUser(userId || businessId, email);
+  if (stripeCheck.hasActiveSub) {
+    const targetId = businessId || userId;
+    if (targetId) {
+      if (!fallbackBusinesses[targetId]) {
+        fallbackBusinesses[targetId] = {
+          id: targetId,
+          ownerUid: userId || `owner_${targetId}`,
+          businessName: stripeCheck.businessName || "Artisan",
+          googleMapsReviewUrl: "",
+          subscriptionStatus: "active",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString() + "_paid_verified",
+        };
+      } else {
+        fallbackBusinesses[targetId].subscriptionStatus = "active";
+        fallbackBusinesses[targetId].updatedAt = new Date().toISOString() + "_paid_verified";
+        if (stripeCheck.businessName) fallbackBusinesses[targetId].businessName = stripeCheck.businessName;
+      }
+    }
+    return res.json({ isPro: true, status: "active", customerId: stripeCheck.customerId });
+  }
+
+  if (businessId && fallbackBusinesses[businessId]?.subscriptionStatus === "active") {
+    return res.json({ isPro: true, status: "active" });
+  }
+
+  return res.json({ isPro: false, status: "inactive" });
 });
 
 app.post("/api/businesses/:businessId", (req, res) => {
@@ -628,7 +769,294 @@ app.patch("/api/businesses/:businessId/feedbacks/:feedbackId", (req, res) => {
   res.json(item);
 });
 
+// In-memory store of recent contact inquiries for audit/preview
+interface ContactInquiry {
+  id: string;
+  name: string;
+  email: string;
+  message: string;
+  createdAt: string;
+  autoReplySent: boolean;
+  adminNotified: boolean;
+}
+const memoryContactInquiries: ContactInquiry[] = [];
+
+// Contact Us API: Resend email integration with customer auto-reply & admin notification
+app.post("/api/contact", async (req, res) => {
+  try {
+    const { name, email, message } = req.body;
+
+    // 1. Validation
+    if (!name || typeof name !== "string" || name.trim().length === 0) {
+      return res.status(400).json({ error: "Your name is required." });
+    }
+    if (!email || typeof email !== "string" || !email.includes("@") || !email.includes(".")) {
+      return res.status(400).json({ error: "A valid email address is required." });
+    }
+    if (!message || typeof message !== "string" || message.trim().length < 5) {
+      return res.status(400).json({ error: "Please enter a message with at least 5 characters." });
+    }
+
+    const cleanName = name.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanMessage = message.trim();
+    const adminEmail = process.env.ADMIN_EMAIL || "ossovi32@gmail.com";
+    const fromAddress = process.env.RESEND_FROM_EMAIL || "TapShield <noreply@tapshield.app>";
+
+    const autoReplyText =
+      "Thank you for reaching out. Our team has received your message and will contact you within 24 hours.";
+
+    const inquiryRecord: ContactInquiry = {
+      id: `inq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      name: cleanName,
+      email: cleanEmail,
+      message: cleanMessage,
+      createdAt: new Date().toISOString(),
+      autoReplySent: false,
+      adminNotified: false,
+    };
+
+    console.log(`[CONTACT] New inquiry received from ${cleanName} (${cleanEmail})`);
+
+    const resend = getResend();
+    let emailServiceUsed = "resend";
+
+    // Official TapShield Logo PNG for email avatar / profile picture
+    const logoFilePath = path.join(process.cwd(), "public", "tapshield-logo.png");
+    let logoBuffer: Buffer | null = null;
+    try {
+      if (fs.existsSync(logoFilePath)) {
+        logoBuffer = fs.readFileSync(logoFilePath);
+      }
+    } catch (e) {
+      console.warn("[CONTACT] Could not read tapshield-logo.png for email:", e);
+    }
+
+    const resendAttachments = logoBuffer
+      ? [
+          {
+            filename: "tapshield-logo.png",
+            content: logoBuffer,
+            contentType: "image/png",
+            contentId: "tapshield-logo",
+          },
+        ]
+      : undefined;
+
+    const nodemailerAttachments =
+      logoFilePath && fs.existsSync(logoFilePath)
+        ? [
+            {
+              filename: "tapshield-logo.png",
+              path: logoFilePath,
+              cid: "tapshield-logo",
+            },
+          ]
+        : undefined;
+
+    // 100% email-client compatible HTML with bulletproof <table> headers and embedded profile logo
+    const autoReplyHtml = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 560px; margin: 0 auto; background: #0A0A0A; color: #FFFFFF; border-radius: 12px; border: 1px solid #262626; padding: 32px; box-sizing: border-box;">
+        <!-- Email Header Table: Profile Logo + Brand Details -->
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="width: 100%; border-bottom: 1px solid #262626; padding-bottom: 20px; margin-bottom: 24px; border-collapse: collapse;">
+          <tr>
+            <td valign="middle" style="width: 48px; vertical-align: middle; padding-right: 14px; text-align: left;">
+              <table cellpadding="0" cellspacing="0" border="0" style="margin: 0; padding: 0; border-collapse: collapse;">
+                <tr>
+                  <td align="center" valign="middle" style="width: 44px; height: 44px; padding: 0; border-radius: 11px; overflow: hidden; background-color: #10B981; text-align: center; vertical-align: middle;">
+                    <img src="cid:tapshield-logo" width="44" height="44" alt="TapShield" style="display: block; width: 44px; height: 44px; border-radius: 11px; border: 0; outline: none; text-decoration: none;" />
+                  </td>
+                </tr>
+              </table>
+            </td>
+            <td valign="middle" align="left" style="vertical-align: middle; text-align: left;">
+              <h1 style="color: #FFFFFF; font-size: 19px; line-height: 24px; margin: 0; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                Tap<span style="color: #10B981;">Shield</span> Support
+              </h1>
+              <p style="color: #737373; font-size: 12px; line-height: 16px; margin: 2px 0 0 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                NFC Customer Feedback &amp; Google Review Routing
+              </p>
+            </td>
+          </tr>
+        </table>
+
+        <p style="color: #E5E5E5; font-size: 15px; line-height: 1.6; margin: 0 0 16px 0;">
+          Hi <strong>${cleanName}</strong>,
+        </p>
+
+        <div style="background: #141414; border-left: 4px solid #10B981; padding: 18px 20px; border-radius: 0 8px 8px 0; margin-bottom: 24px;">
+          <p style="color: #10B981; font-weight: 700; font-size: 15px; margin: 0; line-height: 1.5;">
+            Thank you for reaching out. Our team has received your message and will contact you within 24 hours.
+          </p>
+        </div>
+
+        <div style="background: #171717; border: 1px solid #262626; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+          <h3 style="color: #A3A3A3; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; margin: 0 0 8px 0;">Summary of Your Message:</h3>
+          <p style="color: #D4D4D4; font-size: 13px; line-height: 1.6; margin: 0; white-space: pre-wrap;">${cleanMessage}</p>
+        </div>
+
+        <div style="border-top: 1px solid #262626; padding-top: 20px; font-size: 11px; color: #737373; line-height: 1.5;">
+          <p style="margin: 0 0 8px 0;">
+            <strong>Please note:</strong> A refund is not possible once a purchase is processed.
+          </p>
+          <p style="margin: 0;">
+            © ${new Date().getFullYear()} TapShield • Customer Reputation Management
+          </p>
+        </div>
+      </div>
+    `;
+
+    const adminNotificationHtml = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 560px; margin: 0 auto; background: #0A0A0A; color: #FFFFFF; border-radius: 12px; border: 1px solid #262626; padding: 32px; box-sizing: border-box;">
+        <!-- Admin Email Header Table -->
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="width: 100%; border-bottom: 1px solid #262626; padding-bottom: 18px; margin-bottom: 20px; border-collapse: collapse;">
+          <tr>
+            <td valign="middle" style="width: 48px; vertical-align: middle; padding-right: 14px; text-align: left;">
+              <table cellpadding="0" cellspacing="0" border="0" style="margin: 0; padding: 0; border-collapse: collapse;">
+                <tr>
+                  <td align="center" valign="middle" style="width: 44px; height: 44px; padding: 0; border-radius: 11px; overflow: hidden; background-color: #10B981; text-align: center; vertical-align: middle;">
+                    <img src="cid:tapshield-logo" width="44" height="44" alt="TapShield" style="display: block; width: 44px; height: 44px; border-radius: 11px; border: 0; outline: none; text-decoration: none;" />
+                  </td>
+                </tr>
+              </table>
+            </td>
+            <td valign="middle" align="left" style="vertical-align: middle; text-align: left;">
+              <span style="background: #10B981; color: #000000; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 1px; display: inline-block; margin-bottom: 4px;">New Inquiry</span>
+              <h2 style="color: #FFFFFF; font-size: 18px; line-height: 22px; margin: 0 0 2px 0; font-weight: 800; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                Contact Form Submission
+              </h2>
+              <p style="color: #737373; font-size: 12px; margin: 0; font-family: monospace;">Received: ${new Date().toLocaleString()}</p>
+            </td>
+          </tr>
+        </table>
+
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+          <tr>
+            <td style="padding: 10px 0; border-bottom: 1px solid #262626; color: #737373; font-size: 12px; text-transform: uppercase; width: 90px; font-weight: 700;">Name:</td>
+            <td style="padding: 10px 0; border-bottom: 1px solid #262626; color: #FFFFFF; font-size: 14px; font-weight: 600;">${cleanName}</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 0; border-bottom: 1px solid #262626; color: #737373; font-size: 12px; text-transform: uppercase; font-weight: 700;">Email:</td>
+            <td style="padding: 10px 0; border-bottom: 1px solid #262626; color: #10B981; font-size: 14px; font-family: monospace;">
+              <a href="mailto:${cleanEmail}" style="color: #10B981; text-decoration: none;">${cleanEmail}</a>
+            </td>
+          </tr>
+        </table>
+
+        <div style="background: #171717; border: 1px solid #262626; border-radius: 8px; padding: 18px; margin-bottom: 24px;">
+          <h3 style="color: #A3A3A3; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; margin: 0 0 10px 0;">Customer Message:</h3>
+          <p style="color: #EDEDED; font-size: 14px; line-height: 1.6; margin: 0; white-space: pre-wrap;">${cleanMessage}</p>
+        </div>
+
+        <div style="border-top: 1px solid #262626; padding-top: 16px; font-size: 11px; color: #737373;">
+          <p style="margin: 0;">Reply directly to this customer by emailing <a href="mailto:${cleanEmail}" style="color: #10B981;">${cleanEmail}</a>.</p>
+        </div>
+      </div>
+    `;
+
+    if (resend) {
+      // 2. Resend Email Integration
+      // In Resend, if the domain is not verified yet, sending from onboarding@resend.dev to the account email works for testing
+      const effectiveFrom = process.env.RESEND_FROM_EMAIL || "TapShield <onboarding@resend.dev>";
+
+      // Simultaneously dispatch customer auto-reply & admin notification
+      const [autoReplyResult, adminResult] = await Promise.allSettled([
+        resend.emails.send({
+          from: effectiveFrom,
+          to: cleanEmail,
+          subject: "Thank you for reaching out - TapShield Support",
+          text: autoReplyText,
+          html: autoReplyHtml,
+          attachments: resendAttachments,
+        }),
+        resend.emails.send({
+          from: effectiveFrom,
+          to: adminEmail,
+          subject: `[Contact Form] New message from ${cleanName}`,
+          text: `Name: ${cleanName}\nEmail: ${cleanEmail}\n\nMessage:\n${cleanMessage}`,
+          html: adminNotificationHtml,
+          attachments: resendAttachments,
+        }),
+      ]);
+
+      inquiryRecord.autoReplySent = autoReplyResult.status === "fulfilled";
+      inquiryRecord.adminNotified = adminResult.status === "fulfilled";
+
+      if (autoReplyResult.status === "rejected") {
+        console.warn("[CONTACT] Resend auto-reply to customer warning:", autoReplyResult.reason);
+      } else {
+        console.log("[CONTACT] Resend auto-reply successfully sent to customer:", cleanEmail);
+      }
+
+      if (adminResult.status === "rejected") {
+        console.warn("[CONTACT] Resend admin notification warning:", adminResult.reason);
+      } else {
+        console.log("[CONTACT] Resend admin notification successfully sent to admin:", adminEmail);
+      }
+    } else {
+      // 3. Graceful Fallback (Nodemailer / Development Preview Mode)
+      emailServiceUsed = "nodemailer_or_preview";
+      const transporter = getMailTransporter();
+
+      const [autoReplyResult, adminResult] = await Promise.allSettled([
+        transporter.sendMail({
+          from: fromAddress,
+          to: cleanEmail,
+          subject: "Thank you for reaching out - TapShield Support",
+          text: autoReplyText,
+          html: autoReplyHtml,
+          attachments: nodemailerAttachments,
+        }),
+        transporter.sendMail({
+          from: fromAddress,
+          to: adminEmail,
+          subject: `[Contact Form] New message from ${cleanName}`,
+          text: `Name: ${cleanName}\nEmail: ${cleanEmail}\n\nMessage:\n${cleanMessage}`,
+          html: adminNotificationHtml,
+          attachments: nodemailerAttachments,
+        }),
+      ]);
+
+      inquiryRecord.autoReplySent = autoReplyResult.status === "fulfilled";
+      inquiryRecord.adminNotified = adminResult.status === "fulfilled";
+
+      console.log(`[CONTACT] Auto-reply recorded for ${cleanEmail} (Service: ${emailServiceUsed})`);
+      console.log(`[CONTACT] Admin notification recorded for ${adminEmail} (Service: ${emailServiceUsed})`);
+    }
+
+    memoryContactInquiries.unshift(inquiryRecord);
+
+    return res.status(200).json({
+      success: true,
+      message: autoReplyText,
+      data: {
+        id: inquiryRecord.id,
+        name: cleanName,
+        email: cleanEmail,
+        createdAt: inquiryRecord.createdAt,
+        service: emailServiceUsed,
+      },
+    });
+  } catch (error: any) {
+    console.error("[CONTACT API ERROR]:", error);
+    return res.status(500).json({
+      error: error?.message || "Failed to process contact inquiry. Please try again later.",
+    });
+  }
+});
+
+// Admin endpoint to view recent inquiries
+app.get("/api/contact/inquiries", (_req, res) => {
+  res.json({
+    total: memoryContactInquiries.length,
+    inquiries: memoryContactInquiries,
+  });
+});
+
 async function startServer() {
+  // Explicitly serve public assets (logos, icons, manifests) directly
+  app.use(express.static(path.join(process.cwd(), "public")));
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

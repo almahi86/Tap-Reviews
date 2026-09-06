@@ -19,9 +19,11 @@ import {
   User,
   LogOut,
   ShieldCheck,
+  Mail,
 } from "lucide-react";
 import type { AuthUserProfile } from "../types";
 import { AuthModal } from "./AuthModal";
+import { ContactForm } from "./ContactForm";
 
 interface LandingPageProps {
   currentUser: AuthUserProfile | null;
@@ -54,8 +56,8 @@ export function LandingPage({
       <header className="sticky top-0 z-40 bg-[#0F0F0F]/90 backdrop-blur-md border-b border-white/10 px-4 sm:px-8 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-500 rounded-full flex items-center justify-center font-black text-black text-xl">
-              R
+            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center font-black text-black shadow-lg shadow-emerald-500/20">
+              <Shield className="w-5 h-5 text-black" fill="currentColor" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -78,6 +80,9 @@ export function LandingPage({
             </a>
             <a href="#pricing" className="hover:text-emerald-400 transition">
               Pricing
+            </a>
+            <a href="#contact" className="hover:text-emerald-400 transition">
+              Contact Us
             </a>
             <button
               onClick={onOpenCustomerRateView}
@@ -726,17 +731,49 @@ export function LandingPage({
         </div>
       </section>
 
+      {/* SECTION 5: Contact Us */}
+      <section id="contact" className="py-20 px-4 sm:px-8 border-b border-white/10 bg-[#0E0E0E]">
+        <div className="max-w-xl mx-auto space-y-8 text-left">
+          <div className="space-y-2 text-center">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono uppercase tracking-widest">
+              <Mail className="w-3.5 h-3.5" />
+              <span>Get In Touch</span>
+            </div>
+            <h2 className="text-3xl font-black uppercase tracking-tight text-white">
+              Contact Us
+            </h2>
+            <p className="text-xs text-stone-400 max-w-md mx-auto">
+              Have questions about TapShield, NFC stands, or setup? Send our team a message and we'll be in touch within 24 hours.
+            </p>
+          </div>
+
+          <div className="bg-[#141414] border border-white/10 rounded-2xl p-6 sm:p-8 shadow-xl">
+            <ContactForm
+              initialName={currentUser?.displayName || ""}
+              initialEmail={currentUser?.email || ""}
+            />
+          </div>
+        </div>
+      </section>
+
       {/* Footer */}
       <footer className="py-12 px-4 sm:px-8 bg-[#080808] text-center text-xs font-mono uppercase tracking-wider text-stone-500 space-y-4">
         <div className="flex items-center justify-center gap-2 text-white font-black text-sm">
-          <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center font-black text-black text-xs">
-            R
+          <div className="w-6 h-6 bg-emerald-500 rounded-md flex items-center justify-center text-black">
+            <Shield className="w-3.5 h-3.5 text-black" fill="currentColor" />
           </div>
           <span>TapShield</span>
         </div>
         <p className="text-stone-400">
           Monthly: $24.99/mo • Yearly: $199.99/yr (Save 33%)
         </p>
+        <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-stone-400">
+          <a href="#how-it-works" className="hover:text-emerald-400 transition">How It Works</a>
+          <span>•</span>
+          <a href="#pricing" className="hover:text-emerald-400 transition">Pricing</a>
+          <span>•</span>
+          <a href="#contact" className="text-emerald-400 hover:text-emerald-300 transition font-bold">Contact Us</a>
+        </div>
         <p className="text-[11px] text-stone-600">
           © {new Date().getFullYear()} TapShield • Customer Feedback & Review Routing
         </p>

@@ -128,7 +128,33 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs = 3000): Promise<T> => {
 const LOCAL_STORAGE_FEEDBACKS_KEY = "tapshield_feedbacks_cache";
 const LOCAL_STORAGE_BIZ_KEY = "tapshield_biz_cache";
 
-export async function fetchBusiness(businessId: string): Promise<Business> {
+export async function fetchBusiness(businessId: string, userEmail?: string): Promise<Business> {
+  const email = userEmail || auth?.currentUser?.email;
+  const uid = auth?.currentUser?.uid || businessId;
+
+  // Check backend server first so real-time Stripe payment status takes effect immediately
+  try {
+    const queryParams = new URLSearchParams();
+    if (email) queryParams.set("email", email);
+    if (uid) queryParams.set("userId", uid);
+    const queryString = queryParams.toString() ? `?${queryParams.toString()}` : "";
+    const res = await fetch(`/api/businesses/${encodeURIComponent(businessId)}${queryString}`);
+    if (res.ok) {
+      const serverBiz = await res.json();
+      if (serverBiz && serverBiz.subscriptionStatus === "active") {
+        if (db && auth?.currentUser) {
+          try {
+            const docRef = doc(db, "businesses", businessId);
+            await setDoc(docRef, serverBiz, { merge: true });
+          } catch {}
+        }
+        return serverBiz;
+      }
+    }
+  } catch (err) {
+    console.warn("Server API fetch error:", err);
+  }
+
   if (db) {
     try {
       const docRef = doc(db, "businesses", businessId);
@@ -139,16 +165,6 @@ export async function fetchBusiness(businessId: string): Promise<Business> {
     } catch (error) {
       console.warn("Firestore fetchBusiness error or timeout, falling back to server API:", error);
     }
-  }
-
-  // Fallback to Express backend API
-  try {
-    const res = await fetch(`/api/businesses/${encodeURIComponent(businessId)}`);
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (err) {
-    console.warn("Server API fetch error:", err);
   }
 
   // Fallback default: demo-cafe is active, while newly accessed businesses are inactive until paid

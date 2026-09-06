@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <defs>
+    <linearGradient id="shieldFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18181B" />
+      <stop offset="100%" stop-color="#09090B" />
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34D399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Shield Silhouette -->
+  <path d="M256 48 C368 48 424 92 424 172 C424 324 256 448 256 464 C256 464 88 324 88 172 C88 92 144 48 256 48 Z" fill="url(#shieldFill)" stroke="url(#borderGrad)" stroke-width="16" stroke-linejoin="round" />
+  
+  <!-- Inner Shield Wall -->
+  <path d="M256 82 C344 82 390 118 390 182 C390 304 256 408 256 420 C256 420 122 304 122 182 C122 118 168 82 256 82 Z" fill="#141414" />
+  
+  <!-- NFC Radio Waves -->
+  <path d="M206 182 C222 168 238 160 256 160 C274 160 290 168 306 182" fill="none" stroke="#34D399" stroke-width="14" stroke-linecap="round" opacity="0.7" />
+  <path d="M226 206 C236 196 246 192 256 192 C266 192 276 196 286 206" fill="none" stroke="#34D399" stroke-width="12" stroke-linecap="round" opacity="0.9" />
+
+  <!-- Verification Checkmark / Shield Core -->
+  <path d="M200 292 L240 332 L318 242" fill="none" stroke="#10B981" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

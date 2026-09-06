@@ -106,7 +106,23 @@ export function GatedDashboard({
     async function loadData() {
       try {
         setLoading(true);
-        const biz = await fetchBusiness(effectiveBusinessId);
+        let biz = await fetchBusiness(effectiveBusinessId, currentUser?.email || undefined);
+
+        // If not active yet, check live Stripe subscription for this user
+        if (biz.subscriptionStatus !== "active" && currentUser) {
+          try {
+            const checkRes = await fetch(
+              `/api/subscription-status?email=${encodeURIComponent(currentUser.email || "")}&userId=${encodeURIComponent(currentUser.uid)}&businessId=${encodeURIComponent(effectiveBusinessId)}`
+            );
+            if (checkRes.ok) {
+              const checkData = await checkRes.json();
+              if (checkData.isPro || checkData.status === "active") {
+                biz = { ...biz, subscriptionStatus: "active" };
+              }
+            }
+          } catch {}
+        }
+
         if (isMounted) {
           setBusiness(biz);
           setGoogleMapsUrl(biz.googleMapsReviewUrl || "");
@@ -295,8 +311,8 @@ export function GatedDashboard({
       <header className="sticky top-0 z-30 bg-[#0F0F0F] border-b border-white/10 px-4 sm:px-8 py-3.5">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-500 rounded-full flex items-center justify-center font-black text-black text-xl">
-              R
+            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center font-black text-black shadow-lg shadow-emerald-500/20">
+              <Shield className="w-5 h-5 text-black" fill="currentColor" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -338,14 +354,20 @@ export function GatedDashboard({
                 <div className="w-7 h-7 rounded-full bg-white text-black flex items-center justify-center text-xs font-black">
                   {currentUser.displayName?.[0] || currentUser.email?.[0] || "O"}
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold text-stone-300 hidden md:inline">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-stone-300">
                     {currentUser.displayName || currentUser.email}
                   </span>
-                  <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                    <CheckCircle2 className="w-3 h-3" />
-                    <span>Verified</span>
-                  </span>
+                  {isSubscribed && (
+                    <span
+                      id="badge-dashboard-pro"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-[10px] font-mono font-black uppercase tracking-wider shadow-sm"
+                      title="TapShield Pro Active Subscriber"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      PRO
+                    </span>
+                  )}
                 </div>
                 <button
                   id="btn-sign-out"

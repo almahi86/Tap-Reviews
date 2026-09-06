@@ -8,6 +8,7 @@ import { AuthModal } from "./components/AuthModal";
 import { SubscriptionModal } from "./components/SubscriptionModal";
 import { StripeEmbeddedCheckoutModal } from "./components/StripeEmbeddedCheckout";
 import { ReturnPage } from "./components/ReturnPage";
+import { ContactModal } from "./components/ContactModal";
 import { auth, fetchBusiness, saveBusinessProfile, signOutUser } from "./lib/firebase";
 import {
   createEmbeddedCheckoutSession,
@@ -24,11 +25,11 @@ import {
   LayoutDashboard,
   Globe,
   Lock,
-  CheckCircle2,
-  AlertCircle,
   LogOut,
   User,
+  Shield,
   ShieldCheck,
+  Mail,
 } from "lucide-react";
 
 export default function App() {
@@ -80,6 +81,7 @@ export default function App() {
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
   const [subscriptionPlan, setSubscriptionPlan] = useState<"month" | "year">("year");
   const [currentBusinessName, setCurrentBusinessName] = useState<string>("");
+  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
 
   // Embedded Stripe checkout modal state
   const [embeddedSession, setEmbeddedSession] = useState<{
@@ -108,14 +110,27 @@ export default function App() {
   useEffect(() => {
     async function loadSubStatus() {
       try {
-        const biz = await fetchBusiness(activeBusinessId);
-        if (biz) {
-          setIsSubscribed(biz.subscriptionStatus === "active");
-          if (biz.businessName) {
-            setCurrentBusinessName(biz.businessName);
-          }
-        } else {
-          setIsSubscribed(activeBusinessId === "demo-cafe");
+        const biz = await fetchBusiness(activeBusinessId, currentUser?.email || undefined);
+        let active = biz?.subscriptionStatus === "active";
+
+        // Also check live Stripe subscription directly if not marked active yet
+        if (!active && currentUser) {
+          try {
+            const res = await fetch(
+              `/api/subscription-status?email=${encodeURIComponent(currentUser.email || "")}&userId=${encodeURIComponent(currentUser.uid)}&businessId=${encodeURIComponent(activeBusinessId)}`
+            );
+            if (res.ok) {
+              const data = await res.json();
+              if (data.isPro || data.status === "active") {
+                active = true;
+              }
+            }
+          } catch {}
+        }
+
+        setIsSubscribed(active);
+        if (biz?.businessName) {
+          setCurrentBusinessName(biz.businessName);
         }
       } catch (err) {
         console.warn("Could not load initial business profile:", err);
@@ -123,7 +138,7 @@ export default function App() {
       }
     }
     loadSubStatus();
-  }, [activeBusinessId]);
+  }, [activeBusinessId, currentUser]);
 
   // Check URL parameters for Stripe success callback
   useEffect(() => {
@@ -292,8 +307,8 @@ export default function App() {
         className="bg-[#0F0F0F] text-stone-300 px-4 py-2.5 text-xs flex flex-wrap items-center justify-between border-b border-white/10 shadow-sm z-40 gap-2"
       >
         <div className="flex items-center gap-2.5">
-          <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center font-black text-black text-xs">
-            R
+          <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center text-black">
+            <Shield className="w-3.5 h-3.5 text-black" fill="currentColor" />
           </div>
           <span className="font-black text-white tracking-widest uppercase text-[11px]">
             TapShield
@@ -357,24 +372,15 @@ export default function App() {
                 {currentUser.email || currentUser.displayName}
               </span>
 
-              {/* Email verification status badge */}
-              {currentUser.emailVerified ? (
+              {isSubscribed && (
                 <span
-                  title="Email verified. Full access granted."
-                  className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                  id="badge-nav-pro"
+                  className="inline-flex items-center gap-1 text-[10px] font-mono font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 uppercase tracking-wider shadow-sm"
+                  title="TapShield Pro Active Subscriber"
                 >
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span className="hidden md:inline">Verified</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  PRO
                 </span>
-              ) : (
-                <button
-                  onClick={() => setCurrentView("dashboard")}
-                  title="Email unverified. Click to enter 6-digit code."
-                  className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 cursor-pointer animate-pulse"
-                >
-                  <AlertCircle className="w-3 h-3" />
-                  <span>Verify OTP</span>
-                </button>
               )}
 
               <button
@@ -395,6 +401,17 @@ export default function App() {
               <span>Sign In</span>
             </button>
           )}
+
+          {/* Contact Support Button */}
+          <button
+            id="btn-nav-contact"
+            onClick={() => setIsContactModalOpen(true)}
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-white/20 text-stone-300 hover:text-white text-[11px] font-mono transition cursor-pointer"
+            title="Contact TapShield Support"
+          >
+            <Mail className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Contact</span>
+          </button>
         </div>
       </nav>
 
@@ -574,6 +591,14 @@ export default function App() {
             }
           }
         }}
+      />
+
+      {/* Contact Us Support Modal */}
+      <ContactModal
+        isOpen={isContactModalOpen}
+        onClose={() => setIsContactModalOpen(false)}
+        initialName={currentUser?.displayName || ""}
+        initialEmail={currentUser?.email || ""}
       />
     </div>
   );

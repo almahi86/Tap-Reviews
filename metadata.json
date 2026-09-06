@@ -1,6 +1,6 @@
 {
   "name": "TapShield - NFC Customer Feedback Recovery",
-  "description": "Micro-SaaS platform that intercepts negative reviews from in-store NFC taps and redirects happy customers to Google Maps reviews.",
+  "description": "Customer feedback and Google review routing system using in-store NFC stands to increase positive reviews, attract potential customers, and handle feedback privately.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

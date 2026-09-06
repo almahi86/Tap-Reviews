@@ -5,7 +5,13 @@ import { LandingPage } from "./components/LandingPage";
 import { EmailVerificationScreen } from "./components/EmailVerificationScreen";
 import { AuthModal } from "./components/AuthModal";
 import { auth, fetchBusiness, saveBusinessProfile, signOutUser } from "./lib/firebase";
-import { triggerStripeSubscriptionCheckout, checkEmailVerificationStatus } from "./lib/auth-service";
+import {
+  triggerStripeSubscriptionCheckout,
+  checkEmailVerificationStatus,
+  getStoredAuthSession,
+  saveAuthSession,
+  clearAuthSession,
+} from "./lib/auth-service";
 import type { AuthUserProfile } from "./types";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -53,14 +59,8 @@ export default function App() {
   const [currentView, setCurrentView] = useState<"landing" | "dashboard" | "rate">(initial.view);
   const [activeBusinessId, setActiveBusinessId] = useState<string>(initial.businessId);
 
-  // Authenticated user profile: starts with demo verified user or null
-  const [currentUser, setCurrentUser] = useState<AuthUserProfile | null>({
-    uid: "demo_owner_1",
-    displayName: "Artisan Owner",
-    email: "owner@artisanbrews.com",
-    emailVerified: true,
-    isDemo: true,
-  });
+  // Authenticated user profile: starts as null (no automatic demo account)
+  const [currentUser, setCurrentUser] = useState<AuthUserProfile | null>(null);
 
   // Auth modal control
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -69,6 +69,18 @@ export default function App() {
   // Subscription state: tracks if business owner has active access
   const [isSubscribed, setIsSubscribed] = useState<boolean>(true);
   const [isCheckingOut, setIsCheckingOut] = useState<boolean>(false);
+
+  // Check stored auth session expiration on app launch
+  useEffect(() => {
+    const session = getStoredAuthSession();
+    if (!session) {
+      clearAuthSession();
+      if (auth?.currentUser) {
+        signOutUser().catch(() => {});
+      }
+      setCurrentUser(null);
+    }
+  }, []);
 
   // Sync business subscription status
   useEffect(() => {
@@ -94,11 +106,21 @@ export default function App() {
     }
   }, []);
 
-  // Listen to Firebase Auth if active
+  // Listen to Firebase Auth if active with 7-day session check
   useEffect(() => {
     if (auth) {
       const unsubscribe = onAuthStateChanged(auth, async (user) => {
         if (user) {
+          // Check if session has expired beyond 7 days
+          const session = getStoredAuthSession();
+          if (session && Date.now() > session.expiresAt) {
+            console.log("Auth session expired after 7 days, signing out user.");
+            await signOutUser().catch(() => {});
+            clearAuthSession();
+            setCurrentUser(null);
+            return;
+          }
+
           let verified = user.emailVerified;
           // Check backend OTP verification store if client auth has false
           if (!verified && user.email) {
@@ -108,12 +130,25 @@ export default function App() {
               // keep existing
             }
           }
-          setCurrentUser({
+
+          const profile: AuthUserProfile = {
             uid: user.uid,
             email: user.email,
             displayName: user.displayName,
             emailVerified: verified,
-          });
+            isDemo: false,
+          };
+
+          // If no stored session, initialize 7-day session by default
+          if (!session) {
+            saveAuthSession(profile, true);
+          }
+
+          setCurrentUser(profile);
+          setActiveBusinessId(user.uid);
+        } else {
+          clearAuthSession();
+          setCurrentUser(null);
         }
       });
       return () => unsubscribe();
@@ -151,28 +186,17 @@ export default function App() {
     }
   };
 
-  // Sandbox mode instant bypass
-  const handleActivateSandbox = async () => {
-    setIsSubscribed(true);
-    try {
-      await saveBusinessProfile({
-        id: activeBusinessId,
-        subscriptionStatus: "active",
-      });
-    } catch (err) {
-      console.warn("Could not save sandbox status:", err);
-    }
-    setCurrentView("dashboard");
-  };
-
   const handleSignOut = async () => {
     try {
       await signOutUser();
     } catch {
       // ignored
     }
+    clearAuthSession();
     setCurrentUser(null);
     setActivePreviewCode(undefined);
+    setActiveBusinessId("demo-cafe");
+    setCurrentView("landing");
   };
 
   return (
@@ -187,10 +211,10 @@ export default function App() {
             R
           </div>
           <span className="font-black text-white tracking-widest uppercase text-[11px]">
-            TapShield Platform
+            TapShield
           </span>
           <span className="hidden lg:inline text-stone-400 text-xs tracking-tight">
-            NFC Customer Feedback Recovery Micro-SaaS
+            Customer Feedback & Google Review Routing
           </span>
         </div>
 
@@ -206,7 +230,7 @@ export default function App() {
             }`}
           >
             <Globe className="w-3.5 h-3.5" />
-            <span>Main Website</span>
+            <span>Overview</span>
           </button>
 
           <button
@@ -219,7 +243,7 @@ export default function App() {
             }`}
           >
             <LayoutDashboard className="w-3.5 h-3.5" />
-            <span>Owner Dashboard</span>
+            <span>Dashboard</span>
             {!isSubscribed && <Lock className="w-3 h-3 text-amber-400" />}
           </button>
 
@@ -233,7 +257,7 @@ export default function App() {
             }`}
           >
             <Smartphone className="w-3.5 h-3.5" />
-            <span>Customer NFC Tap</span>
+            <span>Customer View</span>
           </button>
         </div>
 
@@ -299,7 +323,6 @@ export default function App() {
             onOpenCustomerRateView={() => setCurrentView("rate")}
             onUserAuthChange={setCurrentUser}
             onSubscribe={handleSubscribe}
-            onActivateSandbox={handleActivateSandbox}
             isCheckingOut={isCheckingOut}
             onPreviewCodeReceived={(code) => setActivePreviewCode(code)}
           />
@@ -313,10 +336,9 @@ export default function App() {
                 <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto">
                   <Lock className="w-6 h-6" />
                 </div>
-                <h2 className="text-xl font-black uppercase text-white">Owner Login Required</h2>
+                <h2 className="text-xl font-black uppercase text-white">Sign In Required</h2>
                 <p className="text-xs text-stone-400 leading-relaxed">
-                  Please sign in to access your reputation dashboard, review private negative customer
-                  feedback, and configure your store's NFC redirect URL.
+                  Sign in to view customer feedback, check analytics, and update your store's Google review URL.
                 </p>
                 <button
                   id="btn-login-prompt"
@@ -348,6 +370,7 @@ export default function App() {
               }}
               onUserAuthChange={setCurrentUser}
               onBackToLanding={() => setCurrentView("landing")}
+              onOpenAuthModal={() => setIsAuthModalOpen(true)}
             />
           )
         )}

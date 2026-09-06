@@ -205,13 +205,13 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
         {/* Bad Reviews Intercepted */}
         <div className="bg-[#1C1C1C] p-5 rounded-lg border-l-4 border-rose-500 border border-white/5 space-y-1">
           <div className="flex items-center justify-between text-stone-400 text-xs uppercase font-mono tracking-wider">
-            <span>Bad Reviews Shielded</span>
+            <span>Private Feedback</span>
             <ThumbsDown className="w-4 h-4 text-rose-400" />
           </div>
           <div className="text-4xl font-black text-rose-400 tracking-tight">{totals.bad}</div>
           <p className="text-[11px] text-rose-400/90 font-mono flex items-center gap-1">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>{deflectedRate}% intercepted from public view</span>
+            <span>{deflectedRate}% received via private form</span>
           </p>
         </div>
 
@@ -226,7 +226,7 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
           </div>
           <p className="text-[11px] text-cyan-400/90 font-mono flex items-center gap-1">
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>100% of happy taps funneled to Maps</span>
+            <span>Routed directly to Google Maps</span>
           </p>
         </div>
       </div>
@@ -276,7 +276,7 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
                     maxBarSize={32}
                   />
                   <Bar
-                    name="Bad Reviews (Shielded)"
+                    name="Private Feedback"
                     dataKey="bad"
                     fill="#f43f5e"
                     radius={[4, 4, 0, 0]}

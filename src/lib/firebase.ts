@@ -144,11 +144,13 @@ export async function fetchBusiness(businessId: string): Promise<Business> {
 
 export async function saveBusinessProfile(data: Partial<Business> & { id: string }): Promise<void> {
   const docPath = `businesses/${data.id}`;
-  if (db) {
+  const currentUser = auth?.currentUser;
+  if (db && currentUser) {
     try {
       const docRef = doc(db, "businesses", data.id);
       await setDoc(docRef, {
         ...data,
+        ownerUid: currentUser.uid,
         updatedAt: new Date().toISOString(),
       }, { merge: true });
       return;
@@ -191,7 +193,7 @@ export async function submitCustomerFeedback(
       await setDoc(feedbackDocRef, newFeedback);
       return newFeedback;
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, writePath);
+      console.warn("Firestore feedback submission failed, using server fallback:", error);
     }
   }
 
@@ -213,7 +215,15 @@ export function subscribeToFeedbacks(
   businessId: string,
   onUpdate: (feedbacks: FeedbackItem[]) => void
 ): () => void {
-  if (db) {
+  // CRITICAL (Firebase Skill): Only attach onSnapshot listeners if auth is ready and user is authenticated!
+  const currentUser = auth?.currentUser;
+  const isAuthorizedOwner =
+    currentUser &&
+    (currentUser.uid === businessId ||
+      businessId === `biz_${currentUser.uid}` ||
+      businessId.startsWith(currentUser.uid));
+
+  if (db && isAuthorizedOwner) {
     const colPath = `businesses/${businessId}/feedbacks`;
     try {
       const q = query(
@@ -239,7 +249,7 @@ export function subscribeToFeedbacks(
     }
   }
 
-  // Fallback: poll server API
+  // Fallback: poll server API (active for demo mode and unauthenticated previews)
   let active = true;
   const fetchFeedbacks = async () => {
     try {
@@ -267,7 +277,8 @@ export async function updateFeedbackItemStatus(
   status: FeedbackItem["status"],
   internalNote?: string
 ): Promise<void> {
-  if (db) {
+  const currentUser = auth?.currentUser;
+  if (db && currentUser) {
     const docPath = `businesses/${businessId}/feedbacks/${feedbackId}`;
     try {
       const docRef = doc(db, "businesses", businessId, "feedbacks", feedbackId);

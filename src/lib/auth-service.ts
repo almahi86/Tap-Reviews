@@ -15,10 +15,78 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
   updateProfile,
+  setPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence,
   type User,
 } from "firebase/auth";
 import { auth, isFirebaseConfigured } from "./firebase";
 import type { AuthUserProfile, VerificationResult } from "../types";
+
+export const AUTH_SESSION_KEY = "tapshield_auth_session";
+export const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+export const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+export interface StoredAuthSession {
+  uid: string;
+  email?: string | null;
+  displayName?: string | null;
+  savedAt: number;
+  expiresAt: number;
+  staySignedIn: boolean;
+}
+
+/**
+ * Save user authentication session with explicit expiration.
+ * If staySignedIn is true, persists for 7 days (1 week).
+ */
+export function saveAuthSession(
+  user: { uid: string; email?: string | null; displayName?: string | null },
+  staySignedIn: boolean
+): void {
+  try {
+    const duration = staySignedIn ? ONE_WEEK_MS : ONE_DAY_MS;
+    const session: StoredAuthSession = {
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+      savedAt: Date.now(),
+      expiresAt: Date.now() + duration,
+      staySignedIn,
+    };
+    localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+  } catch (err) {
+    console.warn("Could not save auth session to storage:", err);
+  }
+}
+
+/**
+ * Retrieve active auth session if valid and not expired.
+ * Automatically clears session if expired beyond 7 days.
+ */
+export function getStoredAuthSession(): StoredAuthSession | null {
+  try {
+    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredAuthSession;
+    if (parsed.expiresAt && Date.now() > parsed.expiresAt) {
+      localStorage.removeItem(AUTH_SESSION_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Clear stored auth session
+ */
+export function clearAuthSession(): void {
+  try {
+    localStorage.removeItem(AUTH_SESSION_KEY);
+  } catch {}
+}
 
 /**
  * 1. Sign Up with Email and Password
@@ -27,12 +95,21 @@ import type { AuthUserProfile, VerificationResult } from "../types";
 export async function signUpWithEmail(
   email: string,
   password: string,
-  displayName?: string
+  displayName?: string,
+  staySignedIn: boolean = true
 ): Promise<{ user: AuthUserProfile; previewCode?: string }> {
   const cleanEmail = email.trim().toLowerCase();
 
-  // If Firebase Auth is configured, use real Firebase Auth
   if (isFirebaseConfigured && auth) {
+    try {
+      await setPersistence(
+        auth,
+        staySignedIn ? browserLocalPersistence : browserSessionPersistence
+      );
+    } catch (persistErr) {
+      console.warn("Firebase persistence error:", persistErr);
+    }
+
     const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
     const fbUser = userCredential.user;
 
@@ -43,32 +120,23 @@ export async function signUpWithEmail(
     // Trigger 6-digit verification code email
     const sendResult = await sendEmailVerificationCode(cleanEmail, fbUser.uid);
 
+    const userProfile: AuthUserProfile = {
+      uid: fbUser.uid,
+      email: fbUser.email,
+      displayName: displayName || fbUser.displayName,
+      emailVerified: false, // Email/password requires code verification
+      isDemo: false,
+    };
+
+    saveAuthSession(userProfile, staySignedIn);
+
     return {
-      user: {
-        uid: fbUser.uid,
-        email: fbUser.email,
-        displayName: displayName || fbUser.displayName,
-        emailVerified: false, // Email/password requires code verification
-        isDemo: false,
-      },
+      user: userProfile,
       previewCode: sendResult.previewCode,
     };
   }
 
-  // Fallback / Sandbox mode (when Firebase credentials are not yet entered)
-  const mockUid = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const sendResult = await sendEmailVerificationCode(cleanEmail, mockUid);
-
-  return {
-    user: {
-      uid: mockUid,
-      email: cleanEmail,
-      displayName: displayName || cleanEmail.split("@")[0],
-      emailVerified: false, // Must be verified before accessing app views
-      isDemo: true,
-    },
-    previewCode: sendResult.previewCode,
-  };
+  throw new Error("Authentication service is currently unavailable. Please check your connection.");
 }
 
 /**
@@ -77,11 +145,21 @@ export async function signUpWithEmail(
  */
 export async function signInWithEmail(
   email: string,
-  password: string
+  password: string,
+  staySignedIn: boolean = true
 ): Promise<AuthUserProfile> {
   const cleanEmail = email.trim().toLowerCase();
 
   if (isFirebaseConfigured && auth) {
+    try {
+      await setPersistence(
+        auth,
+        staySignedIn ? browserLocalPersistence : browserSessionPersistence
+      );
+    } catch (persistErr) {
+      console.warn("Firebase persistence error:", persistErr);
+    }
+
     const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
     const fbUser = credential.user;
 
@@ -91,56 +169,55 @@ export async function signInWithEmail(
       isVerified = await checkEmailVerificationStatus(cleanEmail, fbUser.uid);
     }
 
-    return {
+    const userProfile: AuthUserProfile = {
       uid: fbUser.uid,
       email: fbUser.email,
       displayName: fbUser.displayName,
       emailVerified: isVerified,
       isDemo: false,
     };
+
+    saveAuthSession(userProfile, staySignedIn);
+    return userProfile;
   }
 
-  // Sandbox fallback: Check if email was verified in local store
-  const isVerified = await checkEmailVerificationStatus(cleanEmail);
-
-  return {
-    uid: `usr_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
-    email: cleanEmail,
-    displayName: cleanEmail.split("@")[0],
-    emailVerified: isVerified,
-    isDemo: true,
-  };
+  throw new Error("Authentication service is currently unavailable. Please check your connection.");
 }
 
 /**
  * 3. Sign In with Google
  * Google accounts are pre-verified, so emailVerified is automatically true.
  */
-export async function signInWithGoogle(): Promise<AuthUserProfile> {
+export async function signInWithGoogle(staySignedIn: boolean = true): Promise<AuthUserProfile> {
   if (isFirebaseConfigured && auth) {
+    try {
+      await setPersistence(
+        auth,
+        staySignedIn ? browserLocalPersistence : browserSessionPersistence
+      );
+    } catch (persistErr) {
+      console.warn("Firebase persistence error:", persistErr);
+    }
+
     const provider = new GoogleAuthProvider();
     provider.addScope("profile");
     provider.addScope("email");
     const result = await signInWithPopup(auth, provider);
     const fbUser = result.user;
 
-    return {
+    const userProfile: AuthUserProfile = {
       uid: fbUser.uid,
       email: fbUser.email,
       displayName: fbUser.displayName,
       emailVerified: true, // Google Sign-Ins bypass email OTP verification
       isDemo: false,
     };
+
+    saveAuthSession(userProfile, staySignedIn);
+    return userProfile;
   }
 
-  // Sandbox fallback for Google popup
-  return {
-    uid: `google_usr_${Date.now()}`,
-    email: "owner.google@example.com",
-    displayName: "Google Verified Owner",
-    emailVerified: true, // Always pre-verified
-    isDemo: true,
-  };
+  throw new Error("Authentication service is currently unavailable. Please check your connection.");
 }
 
 /**

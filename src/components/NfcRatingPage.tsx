@@ -416,8 +416,7 @@ export function NfcRatingPage({
 
       {/* Footer Branding */}
       <footer className="w-full max-w-sm text-center text-[10px] font-mono uppercase tracking-widest text-stone-500 mt-6 space-y-1">
-        <p>Protected by TapShield™ Micro-SaaS Platform</p>
-        <p>Customer feedback recovery & review shield</p>
+        <p>© {new Date().getFullYear()} TapShield • Customer Feedback Routing</p>
       </footer>
     </div>
   );

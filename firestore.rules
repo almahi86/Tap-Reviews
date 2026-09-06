@@ -17,8 +17,8 @@ service cloud.firestore {
     function isBusinessOwner(businessId) {
       return isSignedIn() && (
         request.auth.uid == businessId ||
-        request.auth.uid == resource.data.ownerUid ||
-        request.auth.uid == get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid
+        businessId == 'biz_' + request.auth.uid ||
+        (resource != null && 'ownerUid' in resource.data && resource.data.ownerUid == request.auth.uid)
       );
     }
 
@@ -62,8 +62,7 @@ service cloud.firestore {
                          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'internalNote', 'updatedAt']);
 
         allow create: if isValidId(feedbackId) &&
-                         isValidFeedback(request.resource.data, businessId) &&
-                         exists(/databases/$(database)/documents/businesses/$(businessId));
+                         isValidFeedback(request.resource.data, businessId);
       }
     }
 

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Mail, Lock, User, AlertCircle, ArrowRight } from "lucide-react";
+import { X, Mail, Lock, User, AlertCircle, ArrowRight, Clock } from "lucide-react";
 import { signInWithGoogle, signInWithEmail, signUpWithEmail } from "../lib/auth-service";
 import type { AuthUserProfile } from "../types";
 
@@ -20,6 +20,7 @@ export function AuthModal({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [staySignedIn, setStaySignedIn] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -39,7 +40,12 @@ export function AuthModal({
           throw new Error("Password must be at least 6 characters.");
         }
 
-        const { user, previewCode } = await signUpWithEmail(email, password, displayName);
+        const { user, previewCode } = await signUpWithEmail(
+          email,
+          password,
+          displayName,
+          staySignedIn
+        );
         onAuthSuccess(user, previewCode);
         onClose();
       } else {
@@ -47,7 +53,7 @@ export function AuthModal({
           throw new Error("Email and password are required.");
         }
 
-        const user = await signInWithEmail(email, password);
+        const user = await signInWithEmail(email, password, staySignedIn);
         onAuthSuccess(user);
         onClose();
       }
@@ -62,7 +68,7 @@ export function AuthModal({
     setError(null);
     setIsLoading(true);
     try {
-      const user = await signInWithGoogle();
+      const user = await signInWithGoogle(staySignedIn);
       onAuthSuccess(user);
       onClose();
     } catch (err: any) {
@@ -124,6 +130,28 @@ export function AuthModal({
           >
             Sign Up
           </button>
+        </div>
+
+        {/* Stay Signed In for 1 Week Option */}
+        <div className="bg-[#0A0A0A] p-3 rounded-xl border border-white/10 flex items-center justify-between gap-3">
+          <label htmlFor="checkbox-stay-signed-in" className="flex items-center gap-3 select-none cursor-pointer flex-1">
+            <input
+              id="checkbox-stay-signed-in"
+              type="checkbox"
+              checked={staySignedIn}
+              onChange={(e) => setStaySignedIn(e.target.checked)}
+              className="w-4 h-4 rounded border-white/30 bg-[#161616] text-emerald-500 focus:ring-emerald-500 accent-emerald-500 cursor-pointer"
+            />
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                Stay signed in for 1 week
+              </span>
+              <span className="text-[10px] text-stone-400 font-mono">
+                Keeps your session active for 7 days
+              </span>
+            </div>
+          </label>
         </div>
 
         {/* Google Sign In Button */}

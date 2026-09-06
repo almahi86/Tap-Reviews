@@ -39,6 +39,7 @@ interface GatedDashboardProps {
   onOpenCustomerRateView: (businessId: string) => void;
   onUserAuthChange: (user: AuthUserProfile | null) => void;
   onBackToLanding?: () => void;
+  onOpenAuthModal?: () => void;
 }
 
 export function GatedDashboard({
@@ -46,6 +47,7 @@ export function GatedDashboard({
   onOpenCustomerRateView,
   onUserAuthChange,
   onBackToLanding,
+  onOpenAuthModal,
 }: GatedDashboardProps) {
   const [businessId, setBusinessId] = useState<string>("demo-cafe");
   const [business, setBusiness] = useState<Business | null>(null);
@@ -69,8 +71,9 @@ export function GatedDashboard({
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackItem | null>(null);
   const [internalNoteInput, setInternalNoteInput] = useState("");
 
-  // Determine current effective business ID
-  const effectiveBusinessId = currentUser?.uid ? `biz_${currentUser.uid.slice(0, 8)}` : businessId;
+  // Determine current effective business ID: real authenticated user uses their user ID, demo uses demo-cafe
+  const effectiveBusinessId =
+    currentUser && !currentUser.isDemo ? currentUser.uid : "demo-cafe";
 
   // Load business profile and subscribe to Firestore feedbacks
   useEffect(() => {
@@ -242,12 +245,9 @@ export function GatedDashboard({
                 <span className="font-black tracking-tight text-white uppercase text-base">
                   TapShield
                 </span>
-                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-white/10 text-stone-300 border border-white/10">
-                  Micro-SaaS
-                </span>
               </div>
               <p className="text-xs text-stone-400 hidden sm:block tracking-tight font-medium">
-                NFC Customer Feedback Recovery Platform
+                Customer Feedback & Google Review Routing
               </p>
             </div>
           </div>
@@ -260,7 +260,7 @@ export function GatedDashboard({
                 onClick={onBackToLanding}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono uppercase tracking-wider text-stone-300 hover:text-white border border-white/10 hover:border-white/25 transition cursor-pointer"
               >
-                <span>← Main Website</span>
+                <span>← Overview</span>
               </button>
             )}
 
@@ -271,7 +271,7 @@ export function GatedDashboard({
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider bg-emerald-500 text-black hover:bg-emerald-400 border border-emerald-400 transition cursor-pointer"
             >
               <Smartphone className="w-3.5 h-3.5" />
-              <span>Simulate NFC Tap</span>
+              <span>Test Customer View</span>
             </button>
 
             {/* User Account / Sign In / Out */}
@@ -304,18 +304,13 @@ export function GatedDashboard({
             ) : (
               <button
                 id="btn-sign-in"
-                onClick={async () => {
-                  try {
-                    const profile = await signInWithGoogle();
-                    onUserAuthChange(profile);
-                  } catch (err: any) {
-                    // Fallback to demo owner account
-                    onUserAuthChange({
-                      uid: "demo_owner_1",
-                      displayName: "Artisan Owner",
-                      email: "owner@artisanbrews.com",
-                      isDemo: true,
-                    });
+                onClick={() => {
+                  if (onOpenAuthModal) {
+                    onOpenAuthModal();
+                  } else {
+                    signInWithGoogle()
+                      .then((profile) => onUserAuthChange(profile))
+                      .catch((err) => console.warn("Login failed:", err));
                   }
                 }}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider bg-white text-black hover:bg-stone-200 transition cursor-pointer"
@@ -354,14 +349,14 @@ export function GatedDashboard({
 
               <div className="space-y-3 max-w-lg mx-auto">
                 <p className="text-emerald-500 font-bold uppercase tracking-widest text-xs">
-                  Paywall / Subscription Required
+                  Subscription Required
                 </p>
                 <h2 className="text-4xl sm:text-6xl font-black text-white tracking-tighter leading-none uppercase">
-                  Unlock Your<br />Feedback Shield
+                  Owner Dashboard<br />Access
                 </h2>
                 <p className="text-stone-400 text-sm leading-relaxed font-medium">
-                  Protect your Google Maps rating. Intercept disgruntled customers before they post
-                  public 1-star reviews and automatically funnel happy visitors to Google reviews.
+                  Increase your good Google reviews to attract more potential customers, manage your private
+                  customer feedback inbox, and track weekly rating trends.
                 </p>
               </div>
 
@@ -399,7 +394,7 @@ export function GatedDashboard({
                     <div className="flex items-baseline justify-between">
                       <div>
                         <h3 className="font-black uppercase tracking-tight text-white text-lg">
-                          {paywallBillingCycle === "year" ? "Annual Pro Shield" : "Monthly Pro Shield"}
+                          {paywallBillingCycle === "year" ? "Annual Plan" : "Monthly Plan"}
                         </h3>
                         <p className="text-xs text-stone-400 font-mono">For stores, cafes & restaurants</p>
                       </div>
@@ -433,23 +428,23 @@ export function GatedDashboard({
                   <ul className="space-y-2.5 text-xs text-stone-300">
                     <li className="flex items-center gap-2">
                       <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                      <span><strong>NFC Tap Public Rating Screen</strong> (Instant 2-sec phone tap)</span>
+                      <span><strong>Customer NFC & QR Rating Page</strong></span>
                     </li>
                     <li className="flex items-center gap-2">
                       <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                      <span><strong>Automated Google Review Funnel</strong> (100% positive redirects)</span>
+                      <span><strong>Direct Google Maps Review Routing</strong></span>
                     </li>
                     <li className="flex items-center gap-2">
                       <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                      <span><strong>Private Dislike Shield</strong> (Keeps complaints off Google)</span>
+                      <span><strong>Private Feedback Collection</strong></span>
                     </li>
                     <li className="flex items-center gap-2">
                       <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                      <span><strong>Weekly Review Analytics Bar Chart</strong> (Daily Good/Bad velocity)</span>
+                      <span><strong>Weekly Review Analytics Bar Chart</strong></span>
                     </li>
                     <li className="flex items-center gap-2">
                       <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                      <span><strong>Real-time Manager Inbox</strong> for immediate customer recovery</span>
+                      <span><strong>Management Inbox</strong> for incoming feedback</span>
                     </li>
                   </ul>
 
@@ -486,13 +481,13 @@ export function GatedDashboard({
 
               {/* Developer / Sandbox instant bypass */}
               <div className="pt-2 border-t border-white/10 max-w-md mx-auto flex items-center justify-between text-xs text-stone-400">
-                <span>Testing without live Stripe keys?</span>
+                <span>Want to test the dashboard?</span>
                 <button
                   id="btn-bypass-subscription"
                   onClick={handleToggleSandboxSubscription}
                   className="text-emerald-400 hover:text-emerald-300 font-bold uppercase tracking-wider underline cursor-pointer"
                 >
-                  Activate Sandbox Pro Mode
+                  Open Demo Dashboard
                 </button>
               </div>
             </div>
@@ -506,10 +501,10 @@ export function GatedDashboard({
             <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-10 pb-8 border-b border-white/10">
               <div>
                 <p className="text-emerald-500 font-bold uppercase tracking-widest text-xs mb-2">
-                  Dashboard / Overview
+                  Dashboard
                 </p>
                 <h1 className="text-5xl sm:text-6xl md:text-7xl font-black tracking-tighter leading-none uppercase text-white">
-                  Recovery<br />Pulse
+                  Customer<br />Overview
                 </h1>
                 <p className="text-xs text-stone-400 mt-2 font-mono uppercase tracking-wider">
                   Store: {business?.businessName || "My Store"}
@@ -523,7 +518,7 @@ export function GatedDashboard({
                   </div>
                   <div className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest inline-flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>PRO PLAN ACTIVE</span>
+                    <span>ACTIVE SUBSCRIPTION</span>
                   </div>
                 </div>
 
@@ -533,7 +528,7 @@ export function GatedDashboard({
                     className="text-xs text-stone-400 hover:text-white px-3 py-2 rounded border border-white/10 bg-[#161616] hover:bg-[#202020] uppercase font-bold tracking-wider cursor-pointer"
                     title="Toggle subscription to test gating"
                   >
-                    Simulate Gate Lock
+                    Simulate Lock
                   </button>
                   <button
                     id="btn-view-nfc-screen"
@@ -541,7 +536,7 @@ export function GatedDashboard({
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded text-xs font-black uppercase tracking-wider bg-emerald-500 text-black hover:bg-emerald-400 transition cursor-pointer"
                   >
                     <Smartphone className="w-4 h-4" />
-                    <span>Test Mobile NFC Rating</span>
+                    <span>Test Customer View</span>
                   </button>
                 </div>
               </div>
@@ -552,30 +547,30 @@ export function GatedDashboard({
               <div className="bg-[#161616] p-6 border-l-4 border-emerald-500 border border-white/5">
                 <div className="text-5xl font-black mb-1 text-white tracking-tight">{feedbacks.length}</div>
                 <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
-                  Negative Reviews Deflected
+                  Private Feedback Received
                 </div>
                 <p className="text-[10px] text-emerald-400 mt-2 font-mono uppercase tracking-wider">
-                  100% Shielded from Google
+                  Logged in private inbox
                 </p>
               </div>
 
               <div className="bg-[#161616] p-6 border-l-4 border-white border border-white/5">
                 <div className="text-5xl font-black mb-1 text-white tracking-tight">{newFeedbacksCount}</div>
                 <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
-                  New Action Items
+                  Pending Action Items
                 </div>
                 <p className="text-[10px] text-stone-400 mt-2 font-mono uppercase tracking-wider">
-                  Pending Manager Review
+                  Awaiting manager follow-up
                 </p>
               </div>
 
               <div className="bg-[#161616] p-6 border-l-4 border-emerald-500 border border-white/5">
                 <div className="text-5xl font-black mb-1 text-white tracking-tight">Direct</div>
                 <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
-                  Google Review Boost
+                  Direct Google Reviews
                 </div>
                 <p className="text-[10px] text-emerald-400 mt-2 font-mono uppercase tracking-wider">
-                  Instant Positive Funnel
+                  Routed to Google Maps
                 </p>
               </div>
 
@@ -584,10 +579,10 @@ export function GatedDashboard({
                   {isFirebaseConfigured ? "Firestore" : "Active Sync"}
                 </div>
                 <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
-                  Database Protection
+                  Database Storage
                 </div>
                 <p className="text-[10px] text-stone-400 mt-2 font-mono uppercase tracking-wider">
-                  Encrypted Private Store
+                  Stored in Firestore
                 </p>
               </div>
             </div>
@@ -703,7 +698,7 @@ export function GatedDashboard({
                       </div>
                       <div>
                         <h2 className="font-black uppercase tracking-tight text-white text-lg">In-Store NFC Link</h2>
-                        <p className="text-xs text-stone-400">Program your NFC pucks or counter cards</p>
+                        <p className="text-xs text-stone-400">Program your NFC stands or counter cards</p>
                       </div>
                     </div>
                   </div>
@@ -728,7 +723,7 @@ export function GatedDashboard({
                     </div>
 
                     <p className="text-xs text-stone-400 leading-relaxed">
-                      Write this URL to any standard NTAG213 / NTAG215 NFC sticker or table puck using
+                      Write this URL to any standard NTAG213 / NTAG215 NFC stand, card, or sticker using
                       free apps like <em>NFC Tools</em>.
                     </p>
                   </div>
@@ -750,7 +745,7 @@ export function GatedDashboard({
             </div>
 
             {/* ==================================================================== */}
-            {/* PRIVATE NEGATIVE FEEDBACK INBOX */}
+            {/* PRIVATE FEEDBACK INBOX */}
             {/* ==================================================================== */}
             <div
               id="private-feedback-inbox"
@@ -760,14 +755,14 @@ export function GatedDashboard({
                 <div>
                   <div className="flex items-center gap-2.5">
                     <h2 className="text-xl font-black uppercase tracking-tight text-white">
-                      Private Negative Feedback Inbox
+                      Customer Feedback Inbox
                     </h2>
                     <span className="px-2.5 py-0.5 rounded text-[11px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                      {feedbacks.length} Intercepted
+                      {feedbacks.length} Messages
                     </span>
                   </div>
                   <p className="text-xs text-stone-400 font-medium mt-1">
-                    Customers who tapped "Dislike" were shielded here away from Google Maps. Review issues and reach out privately.
+                    Customer feedback submitted from the in-store rating page. Review notes and follow up directly.
                   </p>
                 </div>
 
@@ -800,17 +795,17 @@ export function GatedDashboard({
               {loading ? (
                 <div className="py-16 text-center text-xs text-stone-400">
                   <div className="w-6 h-6 border-2 border-white/20 border-t-emerald-500 rounded-full animate-spin mx-auto mb-3" />
-                  Loading Firestore feedback collection...
+                  Loading feedback collection...
                 </div>
               ) : filteredFeedbacks.length === 0 ? (
                 <div className="py-16 text-center text-stone-400 space-y-3">
                   <MessageSquare className="w-8 h-8 text-stone-600 mx-auto" />
                   <p className="text-sm font-bold uppercase tracking-wider text-stone-200">
-                    No negative feedback recorded
+                    No customer feedback yet
                   </p>
                   <p className="text-xs text-stone-400 max-w-sm mx-auto">
-                    When in-store customers tap "Dislike" on your NFC tags, their complaints will
-                    appear here immediately instead of on Google Reviews.
+                    When customers submit feedback through your in-store NFC or QR link, their messages will
+                    appear here for review.
                   </p>
                 </div>
               ) : (

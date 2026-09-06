@@ -30,7 +30,7 @@ interface LandingPageProps {
   onOpenCustomerRateView: () => void;
   onUserAuthChange: (user: AuthUserProfile | null) => void;
   onSubscribe: (interval: "month" | "year") => Promise<void>;
-  onActivateSandbox: () => void;
+  onActivateSandbox?: () => void;
   isCheckingOut: boolean;
   onPreviewCodeReceived?: (code: string) => void;
 }
@@ -42,7 +42,6 @@ export function LandingPage({
   onOpenCustomerRateView,
   onUserAuthChange,
   onSubscribe,
-  onActivateSandbox,
   isCheckingOut,
   onPreviewCodeReceived,
 }: LandingPageProps) {
@@ -63,22 +62,19 @@ export function LandingPage({
                 <span className="font-black tracking-tight text-white uppercase text-base">
                   TapShield
                 </span>
-                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-white/10 text-stone-300 border border-white/10">
-                  Micro-SaaS
-                </span>
               </div>
               <p className="text-xs text-stone-400 hidden sm:block tracking-tight font-medium">
-                NFC In-Store Review Protection & Recovery
+                Customer Feedback & Google Review Routing
               </p>
             </div>
           </div>
 
           <nav className="hidden md:flex items-center gap-6 text-xs font-mono uppercase tracking-wider text-stone-300">
-            <a href="#what-it-does" className="hover:text-emerald-400 transition">
-              What It Does
+            <a href="#how-it-works" className="hover:text-emerald-400 transition">
+              How It Works
             </a>
-            <a href="#how-it-helps" className="hover:text-emerald-400 transition">
-              How It Helps
+            <a href="#features" className="hover:text-emerald-400 transition">
+              Features
             </a>
             <a href="#pricing" className="hover:text-emerald-400 transition">
               Pricing
@@ -88,7 +84,7 @@ export function LandingPage({
               className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-bold cursor-pointer"
             >
               <Smartphone className="w-3.5 h-3.5" />
-              <span>Simulate NFC Tap</span>
+              <span>Test Customer View</span>
             </button>
           </nav>
 
@@ -149,20 +145,20 @@ export function LandingPage({
             <div className="lg:col-span-7 space-y-6 text-left">
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono uppercase tracking-widest">
                 <Shield className="w-3.5 h-3.5" />
-                <span>NFC Review Shield for Physical Businesses</span>
+                <span>Customer Feedback System</span>
               </div>
 
               <h1 className="text-4xl sm:text-6xl md:text-7xl font-black uppercase tracking-tighter leading-none text-white">
-                Deflect 1-Star<br />
-                <span className="text-emerald-400">Google Reviews</span><br />
-                Before They Happen.
+                More Good Reviews.<br />
+                <span className="text-emerald-400">More Potential</span><br />
+                Customers.
               </h1>
 
               <p className="text-base sm:text-lg text-stone-300 max-w-xl font-normal leading-relaxed">
-                Smart NFC tap pucks placed on your checkout counters and dining tables.
-                Customers tap their phone in 2 seconds: happy visitors are instantly funneled to
-                post a <strong>5-star Google Review</strong>, while unhappy visitors are routed
-                to a <strong>private manager inbox</strong> — keeping your public rating spotless.
+                Place NFC stands or QR codes at your checkout counters and tables. Customers tap with
+                their phone to leave a Google review in seconds—increasing your number of good reviews,
+                boosting your local ranking, and attracting more potential customers, while keeping
+                concerns in your private management inbox.
               </p>
 
               {/* Action Buttons */}
@@ -172,7 +168,7 @@ export function LandingPage({
                   id="hero-cta-pricing"
                   className="px-7 py-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-widest transition flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/20 active:scale-98"
                 >
-                  <span>View Pricing & Get Shield</span>
+                  <span>View Pricing</span>
                   <ArrowRight className="w-4 h-4" />
                 </a>
 
@@ -182,30 +178,29 @@ export function LandingPage({
                   className="px-6 py-4 rounded-lg bg-[#161616] hover:bg-[#202020] border border-white/20 text-white font-mono uppercase text-xs tracking-wider transition flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Smartphone className="w-4 h-4 text-emerald-400" />
-                  <span>Simulate In-Store Tap</span>
+                  <span>Test Customer View</span>
                 </button>
               </div>
 
-              {/* Quick Status / Sandbox bypass */}
-              <div className="pt-2 flex items-center gap-4 text-xs font-mono text-stone-400">
-                <span>Instant testing?</span>
-                <button
-                  onClick={() => {
-                    onActivateSandbox();
-                    onEnterDashboard();
-                  }}
-                  className="text-emerald-400 hover:text-emerald-300 underline font-bold uppercase tracking-wider cursor-pointer"
-                >
-                  Launch Sandbox Pro Mode →
-                </button>
-              </div>
+              {/* Sign In Prompt for Existing Owners */}
+              {!currentUser && (
+                <div className="pt-2 flex items-center gap-2 text-xs font-mono text-stone-400">
+                  <span>Already have an account?</span>
+                  <button
+                    onClick={() => setShowLoginModal(true)}
+                    className="text-emerald-400 hover:text-emerald-300 font-bold uppercase tracking-wider underline cursor-pointer"
+                  >
+                    Sign in to Dashboard →
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Visual Phone / NFC Simulator Preview */}
             <div className="lg:col-span-5 flex justify-center">
               <div className="w-full max-w-sm bg-[#161616] rounded-2xl border-2 border-white/20 p-6 shadow-2xl relative">
                 <div className="absolute -top-3 right-6 bg-emerald-500 text-black px-3 py-0.5 rounded text-[10px] font-black uppercase tracking-wider">
-                  Live Customer Flow
+                  Customer Flow
                 </div>
 
                 <div className="text-center space-y-4 pt-2">
@@ -215,7 +210,7 @@ export function LandingPage({
 
                   <div>
                     <div className="text-[11px] font-mono uppercase tracking-widest text-emerald-400 font-bold">
-                      NFC Table Puck Tapped
+                      In-Store NFC / QR Link
                     </div>
                     <div className="text-xl font-black uppercase text-white mt-1">
                       How was your visit?
@@ -228,7 +223,7 @@ export function LandingPage({
                       <ThumbsUp className="w-5 h-5 mx-auto" />
                       <div className="font-black text-sm uppercase">Like</div>
                       <div className="text-[9px] font-mono uppercase font-bold text-black/80">
-                        → Google 5★
+                        → Google Reviews
                       </div>
                     </div>
 
@@ -242,38 +237,38 @@ export function LandingPage({
                   </div>
 
                   <div className="text-[10px] font-mono uppercase tracking-wider text-stone-400 pt-2 border-t border-white/10 flex items-center justify-between">
-                    <span>Public Review Risk</span>
-                    <strong className="text-emerald-400">0% Negative Leaks</strong>
+                    <span>Routing</span>
+                    <strong className="text-emerald-400">Positive → Google | Concerns → Private</strong>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Social Proof / Metrics Banner */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-16 pt-8 border-t border-white/10">
+          {/* Key Capabilities */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-16 pt-8 border-t border-white/10">
             <div className="bg-[#141414] p-5 rounded-lg border border-white/5 text-left">
-              <div className="text-3xl sm:text-4xl font-black text-white">100%</div>
-              <div className="text-xs uppercase font-mono tracking-wider text-stone-400 mt-1">
-                Negative Shielding
+              <div className="text-lg font-black text-emerald-400 uppercase">More Good Reviews</div>
+              <div className="text-xs font-mono text-stone-400 mt-1">
+                Turn happy in-store visits into 5-star Google reviews in seconds
               </div>
             </div>
             <div className="bg-[#141414] p-5 rounded-lg border border-white/5 text-left">
-              <div className="text-3xl sm:text-4xl font-black text-emerald-400">+10x</div>
-              <div className="text-xs uppercase font-mono tracking-wider text-stone-400 mt-1">
-                More 5-Star Reviews
+              <div className="text-lg font-black text-white uppercase">More Customers</div>
+              <div className="text-xs font-mono text-stone-400 mt-1">
+                Higher Google rating & review volume attract new local buyers
               </div>
             </div>
             <div className="bg-[#141414] p-5 rounded-lg border border-white/5 text-left">
-              <div className="text-3xl sm:text-4xl font-black text-white">2 Sec</div>
-              <div className="text-xs uppercase font-mono tracking-wider text-stone-400 mt-1">
-                Zero App Download
+              <div className="text-lg font-black text-white uppercase">Private Feedback</div>
+              <div className="text-xs font-mono text-stone-400 mt-1">
+                Customer concerns go straight to management before they leave
               </div>
             </div>
             <div className="bg-[#141414] p-5 rounded-lg border border-white/5 text-left">
-              <div className="text-3xl sm:text-4xl font-black text-cyan-400">7-Day</div>
-              <div className="text-xs uppercase font-mono tracking-wider text-stone-400 mt-1">
-                Review Velocity Chart
+              <div className="text-lg font-black text-cyan-400 uppercase">Fast NFC Stand Tap</div>
+              <div className="text-xs font-mono text-stone-400 mt-1">
+                Instant phone tap with no app download or account needed
               </div>
             </div>
           </div>
@@ -281,18 +276,18 @@ export function LandingPage({
       </section>
 
       {/* SECTION 1: WHAT THE APP DOES */}
-      <section id="what-it-does" className="py-20 px-4 sm:px-8 border-b border-white/10">
+      <section id="how-it-works" className="py-20 px-4 sm:px-8 border-b border-white/10">
         <div className="max-w-7xl mx-auto space-y-12">
           <div className="text-left space-y-3 max-w-2xl">
             <p className="text-emerald-400 font-mono text-xs uppercase font-bold tracking-widest">
-              Architecture / How It Works
+              Overview
             </p>
             <h2 className="text-3xl sm:text-5xl font-black uppercase tracking-tight text-white">
-              What TapShield Does
+              How It Works
             </h2>
             <p className="text-stone-300 text-sm sm:text-base leading-relaxed">
-              We bridge the physical touchpoint in your store or restaurant directly to your online
-              Google Maps profile, bifurcating sentiment at the moment of customer interaction.
+              Connect in-store touchpoints directly to your Google Maps review page, while routing customer
+              concerns to a private management dashboard.
             </p>
           </div>
 
@@ -303,14 +298,14 @@ export function LandingPage({
                 01
               </div>
               <h3 className="text-xl font-black uppercase tracking-tight text-white">
-                Customer Taps NFC Puck
+                Customer Taps NFC or Scans QR
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed font-sans">
-                An elegant NFC puck or sticker is set on tables or counter stands. Customers tap with
-                an iPhone or Android. The browser opens instantly without installing any app.
+                Place an NFC stand or printed QR code on tables or checkout counters. Customers tap or scan
+                with their phone, opening the rating screen instantly without downloading an app.
               </p>
               <div className="text-[11px] font-mono text-emerald-400">
-                ✓ Compatible with standard NTAG213/215
+                ✓ Compatible with standard NFC tags & QR codes
               </div>
             </div>
 
@@ -320,14 +315,15 @@ export function LandingPage({
                 02
               </div>
               <h3 className="text-xl font-black uppercase tracking-tight text-white">
-                Happy Customers → Google Reviews
+                More Good Reviews → More Customers
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed font-sans">
-                If the customer taps <strong>"Like"</strong>, TapShield automatically redirects them
-                directly into your official Google Maps "Write a Review" dialog with 5 stars ready to post.
+                If the customer taps <strong>"Like"</strong>, they are guided straight to your official
+                Google Maps review dialog. Increasing your count of genuine 5-star reviews boosts your local
+                ranking and drives more potential customers directly to your doors.
               </p>
               <div className="text-[11px] font-mono text-emerald-400">
-                ✓ Deep-linked Google Maps URL
+                ✓ More 5-star reviews & higher local search visibility
               </div>
             </div>
 
@@ -337,14 +333,14 @@ export function LandingPage({
                 03
               </div>
               <h3 className="text-xl font-black uppercase tracking-tight text-white">
-                Unhappy Visitors → Private Shield
+                Customer Concerns → Private Inbox
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed font-sans">
-                If the customer taps <strong>"Dislike"</strong>, Google Maps is completely bypassed.
-                A private, empathetic feedback form collects their complaint directly into your manager inbox.
+                If the customer taps <strong>"Dislike"</strong>, a private feedback form collects their
+                comments directly into your manager inbox so you can address the issue.
               </p>
               <div className="text-[11px] font-mono text-rose-400">
-                ✓ Zero negative reviews reach Google
+                ✓ Kept private to management
               </div>
             </div>
           </div>
@@ -352,94 +348,89 @@ export function LandingPage({
       </section>
 
       {/* SECTION 2: HOW IT HELPS BUSINESSES */}
-      <section id="how-it-helps" className="py-20 px-4 sm:px-8 border-b border-white/10 bg-[#0D0D0D]">
+      <section id="features" className="py-20 px-4 sm:px-8 border-b border-white/10 bg-[#0D0D0D]">
         <div className="max-w-7xl mx-auto space-y-12">
           <div className="text-left space-y-3 max-w-2xl">
             <p className="text-emerald-400 font-mono text-xs uppercase font-bold tracking-widest">
-              Business Impact & ROI
+              Features
             </p>
             <h2 className="text-3xl sm:text-5xl font-black uppercase tracking-tight text-white">
-              How It Will Help Your Business
+              Why Use In-Store Feedback Routing
             </h2>
             <p className="text-stone-300 text-sm sm:text-base leading-relaxed">
-              Google Maps ratings dictate walk-ins, delivery orders, and local search supremacy.
-              A single 1-star drop costs thousands of dollars in lost customers.
+              Gather genuine customer feedback in person—dramatically increasing your number of 5-star
+              Google reviews and attracting more potential customers, while resolving service issues privately.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {/* Benefit 1 */}
             <div className="bg-[#161616] p-6 rounded-xl border border-white/10 text-left space-y-3">
-              <div className="w-10 h-10 rounded bg-rose-500/20 text-rose-400 flex items-center justify-center">
-                <Shield className="w-5 h-5" />
+              <div className="w-10 h-10 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                <Star className="w-5 h-5" />
               </div>
               <h3 className="text-lg font-black uppercase tracking-tight text-white">
-                Prevents Emotional 1-Star Reviews
+                Increases Good Reviews
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                When people are disappointed by cold coffee, slow service, or an incorrect order,
-                they just want to be heard. Giving them an immediate in-store channel neutralizes
-                their anger before they open Google to write a scathing 1-star review.
+                Happy customers rarely remember to look up your business on Google after leaving. Tapping an
+                in-store NFC stand takes 3 seconds and turns everyday satisfaction into verified 5-star reviews.
               </p>
             </div>
 
             {/* Benefit 2 */}
             <div className="bg-[#161616] p-6 rounded-xl border border-white/10 text-left space-y-3">
               <div className="w-10 h-10 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                <Star className="w-5 h-5" />
+                <TrendingUp className="w-5 h-5" />
               </div>
               <h3 className="text-lg font-black uppercase tracking-tight text-white">
-                Multiplies 5-Star Review Volume
+                Attracts Potential Customers
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                Satisfied customers rarely think about searching for your business on Google to post
-                a review. Tapping an NFC puck takes under 3 seconds and catches them while their
-                positive sentiment is at its highest peak.
+                Google prioritizes businesses with higher ratings and recent review activity. Higher Google
+                Maps placement gives your business maximum local visibility, turning searchers into new paying customers.
               </p>
             </div>
 
             {/* Benefit 3 */}
             <div className="bg-[#161616] p-6 rounded-xl border border-white/10 text-left space-y-3">
-              <div className="w-10 h-10 rounded bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
-                <BarChart3 className="w-5 h-5" />
+              <div className="w-10 h-10 rounded bg-rose-500/20 text-rose-400 flex items-center justify-center">
+                <Shield className="w-5 h-5" />
               </div>
               <h3 className="text-lg font-black uppercase tracking-tight text-white">
-                Weekly Velocity & Trend Analytics
+                Private Feedback Channel
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                Your protected dashboard provides interactive bar charts breaking down daily
-                traffic: how many good vs. bad reviews you logged, deflection percentages, and
-                conversions redirected to Google Maps over the entire week.
+                Provide customers an immediate way to share concerns so your team can hear their feedback
+                and address issues directly before they leave.
               </p>
             </div>
 
             {/* Benefit 4 */}
             <div className="bg-[#161616] p-6 rounded-xl border border-white/10 text-left space-y-3">
-              <div className="w-10 h-10 rounded bg-amber-500/20 text-amber-400 flex items-center justify-center">
-                <Zap className="w-5 h-5" />
+              <div className="w-10 h-10 rounded bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+                <BarChart3 className="w-5 h-5" />
               </div>
               <h3 className="text-lg font-black uppercase tracking-tight text-white">
-                Immediate Manager Remedy Loop
+                Daily & Weekly Analytics
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                Receive customer contact info and exact notes directly in your real-time dashboard.
-                Store managers can immediately call or email the customer, offer a voucher, and
-                transform a lost visitor into a lifelong advocate.
+                View day-by-day sentiment charts: track total taps, positive ratings redirected to
+                Google Maps, and private feedback submissions over the week.
               </p>
             </div>
 
             {/* Benefit 5 */}
             <div className="bg-[#161616] p-6 rounded-xl border border-white/10 text-left space-y-3">
-              <div className="w-10 h-10 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                <TrendingUp className="w-5 h-5" />
+              <div className="w-10 h-10 rounded bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                <Zap className="w-5 h-5" />
               </div>
               <h3 className="text-lg font-black uppercase tracking-tight text-white">
-                Higher Google Maps SEO Ranking
+                Direct Customer Follow-Up
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                Google's local search algorithm prioritizes businesses with a high velocity of fresh,
-                positive reviews. By steadily feeding high-sentiment customers to Google daily, your
-                rank in local "near me" searches climbs rapidly.
+                Receive customer notes and optional contact details directly in your management inbox so
+                staff can follow up, resolve complaints, and retain customers.
               </p>
             </div>
 
@@ -449,11 +440,11 @@ export function LandingPage({
                 <Radio className="w-5 h-5" />
               </div>
               <h3 className="text-lg font-black uppercase tracking-tight text-white">
-                Zero Hardware Lock-In
+                Standard NFC & QR Codes
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                Program your own generic NFC tags with any free smartphone app (NFC Tools), or use
-                our auto-generated QR code cards. No proprietary or expensive vendor hardware needed.
+                Compatible with any generic NFC stand, card, or QR code.
+                No proprietary hardware or special equipment required.
               </p>
             </div>
           </div>
@@ -465,14 +456,14 @@ export function LandingPage({
         <div className="max-w-7xl mx-auto space-y-12 text-center">
           <div className="space-y-4 max-w-2xl mx-auto">
             <p className="text-emerald-400 font-mono text-xs uppercase font-bold tracking-widest">
-              Simple, Transparent Plans
+              Pricing
             </p>
             <h2 className="text-3xl sm:text-5xl font-black uppercase tracking-tight text-white">
-              Subscription Cost
+              Subscription Plans
             </h2>
             <p className="text-stone-300 text-sm sm:text-base leading-relaxed font-normal">
-              One intercepted 1-star review or single retained customer pays for the entire year.
-              Choose monthly flexibility or save 33% with annual billing.
+              Increase your positive Google reviews, attract more potential customers, and keep feedback private.
+              Choose flexible monthly billing or save 33% with an annual plan.
             </p>
 
             {/* Monthly / Yearly Toggle */}
@@ -523,7 +514,7 @@ export function LandingPage({
                     <h3 className="text-xl font-black uppercase text-white tracking-tight">
                       Monthly Plan
                     </h3>
-                    <p className="text-xs text-stone-400 font-mono">Standard flex billing</p>
+                    <p className="text-xs text-stone-400 font-mono">Standard billing</p>
                   </div>
                   <span className="text-xs font-mono uppercase tracking-wider px-2.5 py-1 rounded bg-white/10 text-stone-300">
                     Flexible
@@ -538,30 +529,30 @@ export function LandingPage({
                     </span>
                   </div>
                   <p className="text-xs text-stone-400 mt-1 font-mono">
-                    Cancel anytime with 1 click. No long-term commitment.
+                    Billed monthly. Cancel anytime.
                   </p>
                 </div>
 
                 <ul className="space-y-3 text-xs text-stone-300 font-sans">
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>NFC Public Tap Landing Page</strong> (Instant 2-sec load)</span>
+                    <span><strong>Customer NFC & QR Rating Page</strong></span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>Automated Google Review Funnel</strong> (100% happy redirects)</span>
+                    <span><strong>Direct Google Maps Review Routing</strong></span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>Private Dislike Shield</strong> (No bad reviews to Google)</span>
+                    <span><strong>Private Feedback Collection</strong></span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>Weekly Analytics Bar Chart</strong> (Daily Good/Bad velocity)</span>
+                    <span><strong>Weekly Analytics Bar Chart</strong></span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>Encrypted Management Inbox</strong> for instant customer recovery</span>
+                    <span><strong>Private Inbox</strong> for customer messages</span>
                   </li>
                 </ul>
               </div>
@@ -599,10 +590,10 @@ export function LandingPage({
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-xl font-black uppercase text-white tracking-tight">
-                      Annual Pro Plan
+                      Annual Plan
                     </h3>
                     <p className="text-xs text-emerald-400 font-mono font-bold">
-                      Discounted Annual Shield
+                      Discounted Annual Billing
                     </p>
                   </div>
                   <span className="text-xs font-mono uppercase tracking-wider px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
@@ -629,7 +620,7 @@ export function LandingPage({
                       <span>$199.99 (Save $99.89)</span>
                     </div>
                     <div className="text-[10px] text-stone-400 text-right">
-                      Equivalent to just <strong>~$16.66/month</strong>
+                      Equivalent to <strong>~$16.66/month</strong>
                     </div>
                   </div>
                 </div>
@@ -641,19 +632,19 @@ export function LandingPage({
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>2 Months Completely Free</strong> (Save ~$100 annually)</span>
+                    <span><strong>Save $99.89 Annually</strong> (equivalent to 2 months free)</span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>Full Weekly Review Analytics</strong> with Recharts visualization</span>
+                    <span><strong>Weekly Review & Feedback Analytics</strong></span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>Unlimited NFC Taps & Scans</strong> (No per-tap fees)</span>
+                    <span><strong>Unlimited NFC Taps & QR Scans</strong></span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span><strong>Priority Business Support</strong> for setup & NFC tags</span>
+                    <span><strong>Assistance with Setup & NFC Configuration</strong></span>
                   </li>
                 </ul>
               </div>
@@ -673,28 +664,6 @@ export function LandingPage({
                 </button>
               </div>
             </div>
-          </div>
-
-          {/* Sandbox instant toggle note */}
-          <div className="max-w-md mx-auto p-4 rounded-xl bg-[#141414] border border-white/10 text-xs text-stone-400 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-mono uppercase font-bold text-stone-300">
-                Testing without live Stripe key?
-              </span>
-              <button
-                id="btn-sandbox-activate-landing"
-                onClick={() => {
-                  onActivateSandbox();
-                  onEnterDashboard();
-                }}
-                className="text-emerald-400 hover:text-emerald-300 font-bold uppercase tracking-wider underline cursor-pointer"
-              >
-                Activate Sandbox Pro Mode
-              </button>
-            </div>
-            <p className="text-[11px] text-stone-500 leading-normal">
-              Immediately unlocks the full owner dashboard, weekly bar chart analytics, and NFC link configuration without running card transactions.
-            </p>
           </div>
         </div>
       </section>
@@ -718,19 +687,19 @@ export function LandingPage({
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
                 No. Both modern iPhones and Android smartphones have native NFC readers enabled by
-                default. Touching the phone to the NFC puck automatically launches your TapShield
-                rating page in mobile Safari or Chrome in under 2 seconds.
+                default. Touching the phone to the NFC tag automatically launches your rating page in
+                mobile Safari or Chrome in seconds.
               </p>
             </div>
 
             <div className="bg-[#161616] p-6 rounded-xl border border-white/10 space-y-2">
               <h3 className="font-black uppercase text-white text-base">
-                Where do the NFC pucks come from?
+                Where do the NFC tags come from?
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                You can use any standard, readily available NFC stickers or table pucks (such as
-                NTAG213 or NTAG215) ordered from Amazon for under $1 each. Using the free <em>NFC Tools</em>
-                app on your phone, you simply write your store's unique TapShield URL to the tag in 5 seconds.
+                You can use any standard NFC stands, counter cards, or stickers (such as
+                NTAG213 or NTAG215). Using a free NFC app on your phone (like NFC Tools), you simply write
+                your store's URL to the tag.
               </p>
             </div>
 
@@ -739,9 +708,8 @@ export function LandingPage({
                 How does the Google Maps redirect work?
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                You paste your business's Google Maps "Write a Review" short link in your TapShield
-                dashboard. When a customer taps "Like", TapShield forwards them straight to Google
-                Maps to complete their 5-star rating.
+                You paste your business's Google Maps "Write a Review" link in your dashboard. When a
+                customer taps "Like", they are forwarded straight to Google Maps to complete their review.
               </p>
             </div>
 
@@ -750,9 +718,8 @@ export function LandingPage({
                 What does the weekly analytics chart show?
               </h3>
               <p className="text-xs text-stone-400 leading-relaxed">
-                The dashboard bar chart visualizes day-by-day customer sentiment: total reviews
-                received, how many were good (positive taps), how many were intercepted away from
-                Google, and how many successful redirects to Google were made.
+                The dashboard bar chart visualizes day-by-day customer activity: total reviews received,
+                positive ratings routed to Google Maps, and private customer feedback messages.
               </p>
             </div>
           </div>
@@ -765,13 +732,13 @@ export function LandingPage({
           <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center font-black text-black text-xs">
             R
           </div>
-          <span>TapShield Micro-SaaS Platform</span>
+          <span>TapShield</span>
         </div>
         <p className="text-stone-400">
-          Monthly: $24.99/mo • Yearly: $199.99/yr (Save 33% / $99.89 off)
+          Monthly: $24.99/mo • Yearly: $199.99/yr (Save 33%)
         </p>
         <p className="text-[11px] text-stone-600">
-          © {new Date().getFullYear()} TapShield Inc. NFC Customer Feedback Recovery Platform.
+          © {new Date().getFullYear()} TapShield • Customer Feedback & Review Routing
         </p>
       </footer>
 

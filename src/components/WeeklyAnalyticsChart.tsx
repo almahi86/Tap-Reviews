@@ -64,15 +64,13 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
         );
       });
 
-      const actualBad = dayFeedbacks.filter((f) => f.rating === "dislike").length;
-      const actualGood = dayFeedbacks.filter((f) => f.rating === "like").length;
+      const actualBad = dayFeedbacks.filter((f) => f.sentiment === "negative" || f.rating === "dislike").length;
+      const actualGood = dayFeedbacks.filter((f) => f.sentiment === "positive" || f.rating === "like").length;
 
-      // In real store traffic, positive customers outnumber negative customers ~8:1.
-      // We combine real logged taps with baseline store NFC traffic if data is young.
-      const seedFactor = (d.getDay() % 3 === 0 ? 32 : d.getDay() % 2 === 0 ? 28 : 22) + (timeRange === "previous" ? -4 : 0);
-      const goodCount = actualGood > 0 ? actualGood + (seedFactor - 3) : seedFactor;
-      const badCount = actualBad > 0 ? actualBad : Math.max(1, Math.round(seedFactor * 0.12));
-      const redirectedCount = goodCount; // 100% of Good reviews are redirected to Google Reviews!
+      // Real statistics from customer NFC interactions
+      const goodCount = actualGood;
+      const badCount = actualBad;
+      const redirectedCount = actualGood; // 100% of Good reviews are redirected to Google Reviews
       const totalCount = goodCount + badCount;
 
       days.push({
@@ -185,7 +183,7 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
           </div>
           <div className="text-4xl font-black text-white tracking-tight">{totals.total}</div>
           <p className="text-[11px] text-stone-400 font-mono">
-            Total customer engagements this week
+            {totals.total === 0 ? "No in-store taps logged yet" : "Total customer engagements this week"}
           </p>
         </div>
 
@@ -198,7 +196,9 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
           <div className="text-4xl font-black text-emerald-400 tracking-tight">{totals.good}</div>
           <p className="text-[11px] text-emerald-400/90 font-mono flex items-center gap-1">
             <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>{positiveRate}% positive satisfaction rate</span>
+            <span>
+              {totals.total === 0 ? "Awaiting your first review" : `${positiveRate}% positive satisfaction rate`}
+            </span>
           </p>
         </div>
 
@@ -211,7 +211,9 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
           <div className="text-4xl font-black text-rose-400 tracking-tight">{totals.bad}</div>
           <p className="text-[11px] text-rose-400/90 font-mono flex items-center gap-1">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>{deflectedRate}% received via private form</span>
+            <span>
+              {totals.total === 0 ? "0 complaints intercepted" : `${deflectedRate}% received via private form`}
+            </span>
           </p>
         </div>
 
@@ -226,13 +228,26 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
           </div>
           <p className="text-[11px] text-cyan-400/90 font-mono flex items-center gap-1">
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>Routed directly to Google Maps</span>
+            <span>
+              {totals.total === 0 ? "Ready to funnel to Google" : "Routed directly to Google Maps"}
+            </span>
           </p>
         </div>
       </div>
 
       {/* Main Bar Chart */}
-      <div className="bg-[#0F0F0F] p-4 sm:p-6 rounded-xl border border-white/10">
+      <div className="bg-[#0F0F0F] p-4 sm:p-6 rounded-xl border border-white/10 relative">
+        {totals.total === 0 && (
+          <div className="absolute inset-x-6 top-20 z-10 flex flex-col items-center justify-center p-6 bg-[#161616]/90 border border-white/10 rounded-xl backdrop-blur-sm text-center max-w-md mx-auto shadow-2xl">
+            <ShieldCheck className="w-8 h-8 text-emerald-400 mb-2" />
+            <h4 className="text-sm font-black uppercase text-white tracking-wider">
+              No Customer Taps Logged Yet
+            </h4>
+            <p className="text-xs text-stone-400 font-mono mt-1">
+              Your real-time NFC review velocity will populate here as soon as customers tap your in-store NFC stand or test your rating flow.
+            </p>
+          </div>
+        )}
         <div className="h-80 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart

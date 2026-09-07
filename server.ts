@@ -98,11 +98,14 @@ interface StoredBusiness {
 interface StoredFeedback {
   id: string;
   businessId: string;
+  sentiment?: "positive" | "negative";
+  message?: string;
   rating: "like" | "dislike";
   customerNote: string;
   customerContact?: string;
   customerName?: string;
   status: "new" | "reviewed" | "resolved";
+  internalNote?: string;
   createdAt: string;
 }
 
@@ -177,28 +180,55 @@ async function checkStripeSubscriptionForUser(
   return { hasActiveSub: false };
 }
 
-const fallbackFeedbacks: StoredFeedback[] = [
-  {
-    id: "fb_sample_1",
-    businessId: "demo-cafe",
-    rating: "dislike",
-    customerNote: "The oat milk latte was lukewarm and took 18 minutes to arrive during the morning rush. The barista seemed overwhelmed.",
-    customerContact: "alex.m@example.com",
-    customerName: "Alex M.",
-    status: "new",
-    createdAt: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-  },
-  {
-    id: "fb_sample_2",
-    businessId: "demo-cafe",
-    rating: "dislike",
-    customerNote: "The music by the window counter was so loud I couldn't hear my colleague on a call.",
-    customerContact: "+1 (555) 234-5678",
-    customerName: "Sarah K. (Table 4)",
-    status: "reviewed",
-    createdAt: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-  },
-];
+const FEEDBACKS_FILE = path.join(process.cwd(), "data", "feedbacks.json");
+
+function loadStoredFeedbacks(): StoredFeedback[] {
+  try {
+    if (fs.existsSync(FEEDBACKS_FILE)) {
+      const raw = fs.readFileSync(FEEDBACKS_FILE, "utf-8");
+      const list = JSON.parse(raw);
+      if (Array.isArray(list) && list.length > 0) return list;
+    }
+  } catch (err) {
+    console.warn("Could not read feedbacks.json:", err);
+  }
+  return [
+    {
+      id: "fb_sample_1",
+      businessId: "demo-cafe",
+      rating: "dislike",
+      customerNote: "The oat milk latte was lukewarm and took 18 minutes to arrive during the morning rush. The barista seemed overwhelmed.",
+      customerContact: "alex.m@example.com",
+      customerName: "Alex M.",
+      status: "new",
+      createdAt: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
+    },
+    {
+      id: "fb_sample_2",
+      businessId: "demo-cafe",
+      rating: "dislike",
+      customerNote: "The music by the window counter was so loud I couldn't hear my colleague on a call.",
+      customerContact: "+1 (555) 234-5678",
+      customerName: "Sarah K. (Table 4)",
+      status: "reviewed",
+      createdAt: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
+    },
+  ];
+}
+
+const fallbackFeedbacks: StoredFeedback[] = loadStoredFeedbacks();
+
+function persistStoredFeedbacks(): void {
+  try {
+    const dir = path.dirname(FEEDBACKS_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(FEEDBACKS_FILE, JSON.stringify(fallbackFeedbacks, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Could not write feedbacks.json:", err);
+  }
+}
 
 // Health API
 app.get("/api/health", (_req, res) => {
@@ -737,35 +767,48 @@ app.get("/api/businesses/:businessId/feedbacks", (req, res) => {
 
 app.post("/api/businesses/:businessId/feedbacks", (req, res) => {
   const { businessId } = req.params;
-  const { customerNote, customerContact, customerName, rating } = req.body;
+  const { id, customerNote, customerContact, customerName, rating, sentiment, message, createdAt, status } = req.body;
 
-  if (!customerNote || typeof customerNote !== "string") {
-    return res.status(400).json({ error: "Customer note is required" });
-  }
+  const resolvedSentiment: "positive" | "negative" =
+    sentiment === "positive" || rating === "like" ? "positive" : "negative";
+  const resolvedRating: "like" | "dislike" = resolvedSentiment === "positive" ? "like" : "dislike";
+  const resolvedNote: string =
+    (message || customerNote || (resolvedSentiment === "positive" ? "Customer tapped Thumbs Up" : "")).trim().slice(0, 2000);
 
+  const targetId = id || `fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const newFeedback: StoredFeedback = {
-    id: `fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    id: targetId,
     businessId,
-    rating: rating === "like" ? "like" : "dislike",
-    customerNote: customerNote.trim().slice(0, 2000),
+    sentiment: resolvedSentiment,
+    message: resolvedNote,
+    rating: resolvedRating,
+    customerNote: resolvedNote,
     customerContact: customerContact?.slice(0, 150) || undefined,
     customerName: customerName?.slice(0, 100) || undefined,
-    status: "new",
-    createdAt: new Date().toISOString(),
+    status: status || (resolvedSentiment === "positive" ? "reviewed" : "new"),
+    createdAt: createdAt || new Date().toISOString(),
   };
 
-  fallbackFeedbacks.unshift(newFeedback);
+  const existingIdx = fallbackFeedbacks.findIndex((f) => f.id === targetId);
+  if (existingIdx >= 0) {
+    fallbackFeedbacks[existingIdx] = newFeedback;
+  } else {
+    fallbackFeedbacks.unshift(newFeedback);
+  }
+  persistStoredFeedbacks();
   res.status(201).json(newFeedback);
 });
 
 app.patch("/api/businesses/:businessId/feedbacks/:feedbackId", (req, res) => {
   const { feedbackId } = req.params;
-  const { status } = req.body;
+  const { status, internalNote } = req.body;
   const item = fallbackFeedbacks.find((f) => f.id === feedbackId);
   if (!item) {
     return res.status(404).json({ error: "Feedback not found" });
   }
   if (status) item.status = status;
+  if (internalNote !== undefined) item.internalNote = internalNote;
+  persistStoredFeedbacks();
   res.json(item);
 });
 

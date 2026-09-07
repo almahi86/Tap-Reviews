@@ -30,6 +30,7 @@ import {
   Shield,
   ShieldCheck,
   Mail,
+  ExternalLink,
 } from "lucide-react";
 
 export default function App() {
@@ -97,7 +98,7 @@ export default function App() {
   // Check stored auth session expiration on app launch
   useEffect(() => {
     const session = getStoredAuthSession();
-    if (!session) {
+    if (session && session.expiresAt && Date.now() > session.expiresAt) {
       clearAuthSession();
       if (auth?.currentUser) {
         signOutUser().catch(() => {});
@@ -299,6 +300,12 @@ export default function App() {
     setCurrentView("landing");
   };
 
+  // Standalone Customer Rating Page (/rate/[businessId]):
+  // Completely isolated, distraction-free layout with no SaaS navbar, no footer, and no links back to the SaaS platform.
+  if (currentView === "rate") {
+    return <NfcRatingPage businessId={activeBusinessId} />;
+  }
+
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col font-sans selection:bg-emerald-500 selection:text-black">
       {/* Universal Flow Switcher Bar */}
@@ -349,15 +356,16 @@ export default function App() {
 
           <button
             id="nav-tab-rate"
-            onClick={() => setCurrentView("rate")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-black uppercase tracking-wider transition cursor-pointer ${
-              currentView === "rate"
-                ? "bg-emerald-500 text-black shadow-xs font-black"
-                : "text-stone-400 hover:text-white"
-            }`}
+            onClick={() => {
+              const bizId = currentUser ? currentUser.uid : activeBusinessId;
+              window.open(`/rate/${bizId}`, "_blank");
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-black uppercase tracking-wider transition cursor-pointer text-stone-400 hover:text-white"
+            title="Open isolated customer rating view in new window"
           >
             <Smartphone className="w-3.5 h-3.5" />
             <span>Customer View</span>
+            <ExternalLink className="w-3 h-3 text-stone-400" />
           </button>
         </div>
 
@@ -487,10 +495,7 @@ export default function App() {
         )}
 
         {currentView === "rate" && (
-          <NfcRatingPage
-            businessId={activeBusinessId}
-            onNavigateToDashboard={() => setCurrentView("dashboard")}
-          />
+          <NfcRatingPage businessId={activeBusinessId} />
         )}
       </main>
 

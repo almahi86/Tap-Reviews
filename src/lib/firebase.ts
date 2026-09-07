@@ -19,6 +19,7 @@ import {
   query,
   orderBy,
   updateDoc,
+  serverTimestamp,
   type Firestore,
 } from "firebase/firestore";
 import type { Business, FeedbackItem, AuthUserProfile } from "../types";
@@ -128,11 +129,30 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs = 3000): Promise<T> => {
 const LOCAL_STORAGE_FEEDBACKS_KEY = "tapshield_feedbacks_cache";
 const LOCAL_STORAGE_BIZ_KEY = "tapshield_biz_cache";
 
-export async function fetchBusiness(businessId: string, userEmail?: string): Promise<Business> {
+export async function fetchBusiness(businessId: string, userEmail?: string): Promise<Business | null> {
   const email = userEmail || auth?.currentUser?.email;
   const uid = auth?.currentUser?.uid || businessId;
 
-  // Check backend server first so real-time Stripe payment status takes effect immediately
+  // 1. Check direct Firestore collection first
+  if (db) {
+    try {
+      const docRef = doc(db, "businesses", businessId);
+      const snapshot = await withTimeout(getDoc(docRef), 3000);
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        return {
+          id: snapshot.id,
+          ...data,
+          googleReviewUrl: data.googleReviewUrl || data.googleMapsReviewUrl || "",
+          googleMapsReviewUrl: data.googleMapsReviewUrl || data.googleReviewUrl || "",
+        } as Business;
+      }
+    } catch (error) {
+      console.warn("Firestore fetchBusiness error or timeout, checking server API:", error);
+    }
+  }
+
+  // 2. Check backend server API
   try {
     const queryParams = new URLSearchParams();
     if (email) queryParams.set("email", email);
@@ -141,50 +161,49 @@ export async function fetchBusiness(businessId: string, userEmail?: string): Pro
     const res = await fetch(`/api/businesses/${encodeURIComponent(businessId)}${queryString}`);
     if (res.ok) {
       const serverBiz = await res.json();
-      if (serverBiz && serverBiz.subscriptionStatus === "active") {
-        if (db && auth?.currentUser) {
+      if (serverBiz && serverBiz.id) {
+        if (db && auth?.currentUser && serverBiz.subscriptionStatus === "active") {
           try {
             const docRef = doc(db, "businesses", businessId);
             await setDoc(docRef, serverBiz, { merge: true });
           } catch {}
         }
-        return serverBiz;
+        return {
+          ...serverBiz,
+          googleReviewUrl: serverBiz.googleReviewUrl || serverBiz.googleMapsReviewUrl || "",
+          googleMapsReviewUrl: serverBiz.googleMapsReviewUrl || serverBiz.googleReviewUrl || "",
+        };
       }
     }
   } catch (err) {
     console.warn("Server API fetch error:", err);
   }
 
-  if (db) {
-    try {
-      const docRef = doc(db, "businesses", businessId);
-      const snapshot = await withTimeout(getDoc(docRef), 3000);
-      if (snapshot.exists()) {
-        return { id: snapshot.id, ...snapshot.data() } as Business;
-      }
-    } catch (error) {
-      console.warn("Firestore fetchBusiness error or timeout, falling back to server API:", error);
-    }
+  // 3. Demo cafe fallback for initial sandbox testing
+  if (businessId === "demo-cafe") {
+    return {
+      id: "demo-cafe",
+      ownerUid: "demo_owner_1",
+      businessName: "Artisan Brews & Roastery",
+      googleMapsReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+      googleReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+      subscriptionStatus: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
   }
 
-  // Fallback default: demo-cafe is active, while newly accessed businesses are inactive until paid
-  const isDemo = businessId === "demo-cafe";
-  return {
-    id: businessId,
-    ownerUid: `owner_${businessId}`,
-    businessName: isDemo ? "Artisan Brews & Roastery" : "My Store",
-    googleMapsReviewUrl: isDemo ? "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4" : "",
-    subscriptionStatus: isDemo ? "active" : "inactive",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
+  // If business does not exist
+  return null;
 }
 
 export async function saveBusinessProfile(data: Partial<Business> & { id: string }): Promise<void> {
   const currentUser = auth?.currentUser;
+  const reviewUrl = data.googleReviewUrl || data.googleMapsReviewUrl || "";
   const payload = {
     businessName: data.businessName || "My Store",
-    googleMapsReviewUrl: data.googleMapsReviewUrl ?? "",
+    googleMapsReviewUrl: reviewUrl,
+    googleReviewUrl: reviewUrl,
     subscriptionStatus: data.subscriptionStatus || "inactive",
     ...data,
     id: data.id,
@@ -216,105 +235,256 @@ export async function saveBusinessProfile(data: Partial<Business> & { id: string
   }
 }
 
+// Local persistence key helper for feedback isolation per business
+const FEEDBACK_CACHE_PREFIX = "tapshield_feedbacks_";
+
+export function getCachedFeedbacks(businessId: string): FeedbackItem[] {
+  try {
+    const raw = localStorage.getItem(`${FEEDBACK_CACHE_PREFIX}${businessId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCachedFeedbacks(businessId: string, items: FeedbackItem[]): void {
+  try {
+    localStorage.setItem(`${FEEDBACK_CACHE_PREFIX}${businessId}`, JSON.stringify(items));
+  } catch (err) {
+    console.warn("Could not write feedbacks to localStorage cache:", err);
+  }
+}
+
 export async function submitCustomerFeedback(
-  feedback: Omit<FeedbackItem, "id" | "createdAt">
+  feedback: {
+    businessId: string;
+    sentiment?: "positive" | "negative";
+    message?: string;
+    rating?: "like" | "dislike";
+    customerNote?: string;
+    customerContact?: string;
+    customerName?: string;
+    status?: "new" | "reviewed" | "resolved";
+  }
 ): Promise<FeedbackItem> {
-  const { businessId, customerNote, customerContact, customerName, rating } = feedback;
-  const newFeedback: FeedbackItem = {
-    id: `fb_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+  const { businessId, customerContact, customerName } = feedback;
+  const sentiment = feedback.sentiment || (feedback.rating === "like" ? "positive" : "negative");
+  const rating = feedback.rating || (sentiment === "positive" ? "like" : "dislike");
+  const message = feedback.message || feedback.customerNote || (sentiment === "positive" ? "Customer tapped Thumbs Up" : "");
+  const customerNote = feedback.customerNote || feedback.message || (sentiment === "positive" ? "Customer tapped Thumbs Up" : "");
+  const status = feedback.status || (sentiment === "positive" ? "reviewed" : "new");
+
+  const newFeedbackId = `fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const nowIso = new Date().toISOString();
+
+  const item: FeedbackItem = {
+    id: newFeedbackId,
     businessId,
+    sentiment,
+    message,
     rating,
-    customerNote: customerNote || "",
-    customerContact: customerContact || "",
-    customerName: customerName || "",
-    status: "new",
-    createdAt: new Date().toISOString(),
+    customerNote,
+    customerContact,
+    customerName,
+    status,
+    createdAt: nowIso,
   };
 
+  // 1. Immediately cache in localStorage so taps are preserved across refreshes
+  try {
+    const current = getCachedFeedbacks(businessId);
+    const updated = [item, ...current.filter((f) => f.id !== item.id)];
+    saveCachedFeedbacks(businessId, updated);
+  } catch (err) {
+    console.warn("Error caching feedback locally:", err);
+  }
+
+  // 2. Dispatch cross-component local event so active dashboard receives it immediately
+  try {
+    window.dispatchEvent(new CustomEvent("tapshield-feedback-added", { detail: item }));
+  } catch {}
+
+  // 3. Persist to Firestore
   if (db) {
     try {
-      const feedbackDocRef = doc(db, "businesses", businessId, "feedbacks", newFeedback.id);
-      await setDoc(feedbackDocRef, newFeedback);
-      return newFeedback;
+      const feedbackDocRef = doc(db, "businesses", businessId, "feedbacks", newFeedbackId);
+      const firestorePayload: Record<string, any> = {
+        businessId,
+        sentiment,
+        rating,
+        status,
+        createdAt: serverTimestamp(),
+      };
+      if (message) firestorePayload.message = message;
+      if (customerNote) firestorePayload.customerNote = customerNote;
+      if (customerContact) firestorePayload.customerContact = customerContact;
+      if (customerName) firestorePayload.customerName = customerName;
+
+      await setDoc(feedbackDocRef, firestorePayload);
     } catch (error) {
-      console.warn("Firestore feedback submission failed, using server fallback:", error);
+      console.warn("Firestore feedback submission error (continuing with server sync):", error);
     }
   }
 
-  // Fallback to Express backend API
-  const res = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/feedbacks`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(newFeedback),
-  });
-
-  if (!res.ok) {
-    throw new Error("Failed to save customer feedback");
+  // 4. Always sync to Express backend API so server store is also synchronized
+  try {
+    await fetch(`/api/businesses/${encodeURIComponent(businessId)}/feedbacks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: newFeedbackId,
+        businessId,
+        sentiment,
+        message,
+        rating,
+        customerNote,
+        customerContact,
+        customerName,
+        status,
+        createdAt: nowIso,
+      }),
+    });
+  } catch (serverErr) {
+    console.warn("Server API feedback sync notice:", serverErr);
   }
 
-  return await res.json();
+  return item;
 }
 
 export function subscribeToFeedbacks(
   businessId: string,
   onUpdate: (feedbacks: FeedbackItem[]) => void
 ): () => void {
-  // CRITICAL (Firebase Skill): Only attach onSnapshot listeners if auth is ready and user is authenticated!
-  const currentUser = auth?.currentUser;
-  const isAuthorizedOwner =
-    Boolean(currentUser) &&
-    (currentUser?.uid === businessId ||
-      businessId === `biz_${currentUser?.uid}` ||
-      businessId === "demo-cafe" ||
-      businessId.startsWith(currentUser?.uid || ""));
-
   let active = true;
-  const fetchFeedbacks = async () => {
+
+  // 1. Emit existing cached items immediately so UI renders without flickering to 0 on refresh
+  const initialCache = getCachedFeedbacks(businessId);
+  if (initialCache.length > 0) {
+    onUpdate(initialCache);
+  }
+
+  // Helper to safely merge incoming feedback documents with local cache
+  const mergeAndEmit = (incoming: FeedbackItem[]) => {
+    if (!active) return;
+    const current = getCachedFeedbacks(businessId);
+    const map = new Map<string, FeedbackItem>();
+
+    current.forEach((item) => map.set(item.id, item));
+    incoming.forEach((item) => {
+      if (map.has(item.id)) {
+        map.set(item.id, { ...map.get(item.id)!, ...item });
+      } else {
+        map.set(item.id, item);
+      }
+    });
+
+    const merged = Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    saveCachedFeedbacks(businessId, merged);
+    onUpdate(merged);
+  };
+
+  // Listen to same-window real-time feedback submissions
+  const handleLocalEvent = (e: Event) => {
+    const custom = e as CustomEvent<FeedbackItem>;
+    if (custom.detail && custom.detail.businessId === businessId) {
+      mergeAndEmit([custom.detail]);
+    }
+  };
+  window.addEventListener("tapshield-feedback-added", handleLocalEvent);
+
+  let unsubscribeFirestore: (() => void) | null = null;
+  let firestoreWorking = false;
+
+  // 2. Attach Firestore onSnapshot
+  if (db) {
+    try {
+      const colRef = collection(db, "businesses", businessId, "feedbacks");
+      unsubscribeFirestore = onSnapshot(
+        colRef,
+        (snapshot) => {
+          if (!active) return;
+          firestoreWorking = true;
+          const items: FeedbackItem[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            const createdAtStr = data.createdAt?.toDate
+              ? data.createdAt.toDate().toISOString()
+              : typeof data.createdAt === "string"
+              ? data.createdAt
+              : new Date().toISOString();
+
+            items.push({
+              id: docSnap.id,
+              businessId: data.businessId || businessId,
+              sentiment: data.sentiment || (data.rating === "like" ? "positive" : "negative"),
+              message: data.message || data.customerNote || "",
+              rating: data.rating || (data.sentiment === "positive" ? "like" : "dislike"),
+              customerNote: data.customerNote || data.message || "",
+              customerContact: data.customerContact,
+              customerName: data.customerName,
+              status: data.status || (data.sentiment === "positive" ? "reviewed" : "new"),
+              internalNote: data.internalNote,
+              createdAt: createdAtStr,
+            } as FeedbackItem);
+          });
+
+          // Merge with local items so optimistic taps are never erased
+          mergeAndEmit(items);
+        },
+        (error) => {
+          console.warn("Firestore feedback listener error, falling back to server fetch:", error);
+          fetchServerFeedbacks();
+        }
+      );
+    } catch (err) {
+      console.warn("Failed to subscribe via Firestore, using server fetch:", err);
+    }
+  }
+
+  // 3. Fetch from Express backend API to synchronize
+  const fetchServerFeedbacks = async () => {
     try {
       const res = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/feedbacks`);
       if (res.ok && active) {
         const data = await res.json();
-        onUpdate(data);
+        if (Array.isArray(data) && data.length > 0) {
+          const normalized = data.map((item: any) => ({
+            ...item,
+            sentiment: item.sentiment || (item.rating === "like" ? "positive" : "negative"),
+            message: item.message || item.customerNote || "",
+            rating: item.rating || (item.sentiment === "positive" ? "like" : "dislike"),
+            customerNote: item.customerNote || item.message || "",
+            status: item.status || (item.sentiment === "positive" ? "reviewed" : "new"),
+          }));
+          mergeAndEmit(normalized);
+        }
       }
     } catch (err) {
-      console.warn("Poll feedbacks error:", err);
+      console.warn("Server feedbacks fetch warning:", err);
     }
   };
 
-  let unsubscribeFirestore: (() => void) | null = null;
+  fetchServerFeedbacks();
 
-  if (db && isAuthorizedOwner) {
-    try {
-      const q = query(
-        collection(db, "businesses", businessId, "feedbacks"),
-        orderBy("createdAt", "desc")
-      );
-      unsubscribeFirestore = onSnapshot(
-        q,
-        (snapshot) => {
-          if (!active) return;
-          const items: FeedbackItem[] = [];
-          snapshot.forEach((docSnap) => {
-            items.push({ id: docSnap.id, ...docSnap.data() } as FeedbackItem);
-          });
-          onUpdate(items);
-        },
-        (error) => {
-          console.warn("Firestore feedback listener warning, using server polling fallback:", error);
-          fetchFeedbacks();
-        }
-      );
-    } catch (err) {
-      console.warn("Failed to subscribe via Firestore, falling back to polling:", err);
-    }
+  // Polling interval ONLY if Firestore is unavailable
+  let pollInterval: any = null;
+  if (!db) {
+    pollInterval = setInterval(() => {
+      if (!firestoreWorking) {
+        fetchServerFeedbacks();
+      }
+    }, 5000);
   }
 
-  // Initial fetch from backend API
-  fetchFeedbacks();
-  const interval = setInterval(fetchFeedbacks, 4000);
   return () => {
     active = false;
-    clearInterval(interval);
+    if (pollInterval) clearInterval(pollInterval);
+    window.removeEventListener("tapshield-feedback-added", handleLocalEvent);
     if (unsubscribeFirestore) {
       unsubscribeFirestore();
     }

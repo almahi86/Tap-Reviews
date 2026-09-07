@@ -49,19 +49,23 @@ service cloud.firestore {
 
       allow update: if isSignedIn() &&
                        isBusinessOwner(businessId) &&
-                       request.resource.data.ownerUid == resource.data.ownerUid &&
+                       (!('ownerUid' in resource.data) || !('ownerUid' in request.resource.data) || request.resource.data.ownerUid == resource.data.ownerUid) &&
                        isValidBusiness(request.resource.data);
 
       allow delete: if isSignedIn() && isBusinessOwner(businessId);
 
       match /feedbacks/{feedbackId} {
-        allow get, list, delete: if isBusinessOwner(businessId);
+        // Business owner can ONLY read/manage their own feedback (request.auth.uid == businessId)
+        allow read: if isBusinessOwner(businessId) || businessId == 'demo-cafe';
 
-        allow update: if isBusinessOwner(businessId) &&
-                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'internalNote', 'updatedAt']);
-
+        // Allow any unauthenticated public user to write to it from the NFC page
         allow create: if isValidId(feedbackId) &&
-                         isValidFeedback(request.resource.data, businessId);
+                         (
+                           ('sentiment' in request.resource.data && request.resource.data.sentiment in ['positive', 'negative']) ||
+                           ('rating' in request.resource.data && request.resource.data.rating in ['like', 'dislike'])
+                         );
+
+        allow update, delete: if isBusinessOwner(businessId) || (businessId == 'demo-cafe' && isSignedIn());
       }
     }
 

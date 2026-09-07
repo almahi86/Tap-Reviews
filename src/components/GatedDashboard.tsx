@@ -20,12 +20,15 @@ import {
   ArrowRight,
   TrendingUp,
   Store,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import { motion } from "motion/react";
 import {
   fetchBusiness,
   saveBusinessProfile,
   subscribeToFeedbacks,
+  getCachedFeedbacks,
   updateFeedbackItemStatus,
   signOutUser,
   signInWithGoogle,
@@ -66,9 +69,13 @@ export function GatedDashboard({
     );
   }
 
-  const [businessId, setBusinessId] = useState<string>("demo-cafe");
+  // Determine current effective business ID: real authenticated user uses their user ID, demo uses demo-cafe
+  const effectiveBusinessId =
+    currentUser && !currentUser.isDemo ? currentUser.uid : "demo-cafe";
+
+  const [businessId, setBusinessId] = useState<string>(effectiveBusinessId);
   const [business, setBusiness] = useState<Business | null>(null);
-  const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
+  const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>(() => getCachedFeedbacks(effectiveBusinessId));
   const [loading, setLoading] = useState(true);
 
   // Form states
@@ -94,19 +101,31 @@ export function GatedDashboard({
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackItem | null>(null);
   const [internalNoteInput, setInternalNoteInput] = useState("");
 
-  // Determine current effective business ID: real authenticated user uses their user ID, demo uses demo-cafe
-  const effectiveBusinessId =
-    currentUser && !currentUser.isDemo ? currentUser.uid : "demo-cafe";
-
   // Load business profile and subscribe to Firestore feedbacks
   useEffect(() => {
     let unsubscribeFeedbacks: (() => void) | null = null;
     let isMounted = true;
 
+    // Immediately sync feedbacks with cache for this business
+    setFeedbacks(getCachedFeedbacks(effectiveBusinessId));
+
     async function loadData() {
       try {
         setLoading(true);
         let biz = await fetchBusiness(effectiveBusinessId, currentUser?.email || undefined);
+
+        if (!biz) {
+          biz = {
+            id: effectiveBusinessId,
+            ownerUid: currentUser?.uid || `owner_${effectiveBusinessId}`,
+            businessName: currentUser?.displayName || "My Store",
+            googleMapsReviewUrl: "",
+            googleReviewUrl: "",
+            subscriptionStatus: "inactive",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        }
 
         // If not active yet, check live Stripe subscription for this user
         if (biz.subscriptionStatus !== "active" && currentUser) {
@@ -129,14 +148,12 @@ export function GatedDashboard({
           setBusinessName(biz.businessName || "My Store");
         }
 
-        // Only subscribe to feedbacks if active subscriber or demo owner
-        if (biz.subscriptionStatus === "active" || effectiveBusinessId === "demo-cafe") {
-          unsubscribeFeedbacks = subscribeToFeedbacks(effectiveBusinessId, (data) => {
-            if (isMounted) {
-              setFeedbacks(data);
-            }
-          });
-        }
+        // Always subscribe to feedbacks for the effective business
+        unsubscribeFeedbacks = subscribeToFeedbacks(effectiveBusinessId, (data) => {
+          if (isMounted) {
+            setFeedbacks(data);
+          }
+        });
       } catch (err) {
         console.error("Failed to load business data:", err);
       } finally {
@@ -239,18 +256,6 @@ export function GatedDashboard({
     }
   };
 
-  // Instant sandbox bypass toggle for reviewers
-  const handleToggleSandboxSubscription = async () => {
-    if (!business) return;
-    const newStatus = business.subscriptionStatus === "active" ? "inactive" : "active";
-    const updated: Business = {
-      ...business,
-      subscriptionStatus: newStatus,
-    };
-    setBusiness(updated);
-    await saveBusinessProfile(updated);
-  };
-
   // Save Google Maps URL and Business Name to Firestore
   const handleSaveSettings = async (e: FormEvent) => {
     e.preventDefault();
@@ -290,7 +295,7 @@ export function GatedDashboard({
   };
 
   // Copy public NFC rating URL
-  const publicRatingUrl = `${window.location.origin}?rate=${effectiveBusinessId}`;
+  const publicRatingUrl = `${window.location.origin}/rate/${effectiveBusinessId}`;
   const handleCopyLink = () => {
     navigator.clipboard.writeText(publicRatingUrl);
     setCopiedLink(true);
@@ -298,12 +303,26 @@ export function GatedDashboard({
   };
 
   const isSubscribed = business?.subscriptionStatus === "active";
-  const filteredFeedbacks = feedbacks.filter((f) => {
+
+  const positiveFeedbacks = feedbacks.filter(
+    (f) => f.sentiment === "positive" || f.rating === "like"
+  );
+  const negativeFeedbacks = feedbacks.filter(
+    (f) => f.sentiment === "negative" || f.rating === "dislike"
+  );
+
+  const totalPositiveTaps = positiveFeedbacks.length;
+  const totalNegativeTaps = negativeFeedbacks.length;
+  const totalTaps = totalPositiveTaps + totalNegativeTaps;
+  const satisfactionRate = totalTaps > 0 ? Math.round((totalPositiveTaps / totalTaps) * 100) : 100;
+
+  const filteredNegativeFeedbacks = negativeFeedbacks.filter((f) => {
     if (statusFilter === "all") return true;
     return f.status === statusFilter;
   });
 
   const newFeedbacksCount = feedbacks.filter((f) => f.status === "new").length;
+  const newNegativeCount = negativeFeedbacks.filter((f) => f.status === "new").length;
 
   return (
     <div id="gated-dashboard" className="min-h-screen bg-[#0A0A0A] text-white pb-16 font-sans selection:bg-emerald-500 selection:text-black">
@@ -635,13 +654,6 @@ export function GatedDashboard({
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={handleToggleSandboxSubscription}
-                    className="text-xs text-stone-400 hover:text-white px-3 py-2 rounded border border-white/10 bg-[#161616] hover:bg-[#202020] uppercase font-bold tracking-wider cursor-pointer"
-                    title="Toggle subscription to test gating"
-                  >
-                    Simulate Lock
-                  </button>
-                  <button
                     id="btn-view-nfc-screen"
                     onClick={() => onOpenCustomerRateView(effectiveBusinessId)}
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded text-xs font-black uppercase tracking-wider bg-emerald-500 text-black hover:bg-emerald-400 transition cursor-pointer"
@@ -653,47 +665,71 @@ export function GatedDashboard({
               </div>
             </div>
 
-            {/* Stats Row */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-              <div className="bg-[#161616] p-6 border-l-4 border-emerald-500 border border-white/5">
-                <div className="text-5xl font-black mb-1 text-white tracking-tight">{feedbacks.length}</div>
-                <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
-                  Private Feedback Received
+            {/* Stats Row: Total Positive Taps, Total Negative Taps, Total Taps, Negative Messages */}
+            <div id="stats-overview-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+              {/* Positive Taps Card */}
+              <div id="card-positive-taps" className="bg-[#161616] p-6 border-l-4 border-emerald-500 border border-white/5 rounded-xl shadow-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs uppercase font-bold opacity-75 tracking-wider text-stone-300">
+                    Positive Taps
+                  </span>
+                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
+                    <ThumbsUp className="w-4 h-4 text-emerald-400" />
+                  </div>
                 </div>
-                <p className="text-[10px] text-emerald-400 mt-2 font-mono uppercase tracking-wider">
-                  Logged in private inbox
+                <div className="text-5xl font-black mb-1 text-white tracking-tight">{totalPositiveTaps}</div>
+                <p className="text-[11px] text-emerald-400 font-mono uppercase tracking-wider">
+                  Thumbs Up • Sent to Google
                 </p>
               </div>
 
-              <div className="bg-[#161616] p-6 border-l-4 border-white border border-white/5">
-                <div className="text-5xl font-black mb-1 text-white tracking-tight">{newFeedbacksCount}</div>
-                <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
-                  Pending Action Items
+              {/* Negative Taps Card */}
+              <div id="card-negative-taps" className="bg-[#161616] p-6 border-l-4 border-rose-500 border border-white/5 rounded-xl shadow-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs uppercase font-bold opacity-75 tracking-wider text-stone-300">
+                    Negative Taps
+                  </span>
+                  <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center">
+                    <ThumbsDown className="w-4 h-4 text-rose-400" />
+                  </div>
                 </div>
-                <p className="text-[10px] text-stone-400 mt-2 font-mono uppercase tracking-wider">
-                  Awaiting manager follow-up
+                <div className="text-5xl font-black mb-1 text-white tracking-tight">{totalNegativeTaps}</div>
+                <p className="text-[11px] text-rose-400 font-mono uppercase tracking-wider">
+                  Thumbs Down • Shielded Privately
                 </p>
               </div>
 
-              <div className="bg-[#161616] p-6 border-l-4 border-emerald-500 border border-white/5">
-                <div className="text-5xl font-black mb-1 text-white tracking-tight">Direct</div>
-                <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
-                  Direct Google Reviews
+              {/* Total Taps Card */}
+              <div id="card-total-taps" className="bg-[#161616] p-6 border-l-4 border-white/40 border border-white/5 rounded-xl shadow-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs uppercase font-bold opacity-75 tracking-wider text-stone-300">
+                    Total Rating Taps
+                  </span>
+                  <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center">
+                    <TrendingUp className="w-4 h-4 text-stone-300" />
+                  </div>
                 </div>
-                <p className="text-[10px] text-emerald-400 mt-2 font-mono uppercase tracking-wider">
-                  Routed to Google Maps
+                <div className="text-5xl font-black mb-1 text-white tracking-tight">{totalTaps}</div>
+                <p className="text-[11px] text-stone-400 font-mono uppercase tracking-wider">
+                  {satisfactionRate}% Positive Tap Rate
                 </p>
               </div>
 
-              <div className="bg-[#161616] p-6 border-l-4 border-white border border-white/5">
-                <div className="text-3xl font-black mb-1 text-white tracking-tight uppercase">
-                  Cloud Sync
+              {/* Negative Text Messages Card */}
+              <div id="card-negative-messages" className="bg-[#161616] p-6 border-l-4 border-amber-500 border border-white/5 rounded-xl shadow-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs uppercase font-bold opacity-75 tracking-wider text-stone-300">
+                    Negative Feed Messages
+                  </span>
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center">
+                    <MessageSquare className="w-4 h-4 text-amber-400" />
+                  </div>
                 </div>
-                <div className="text-xs uppercase font-bold opacity-50 tracking-wider text-stone-300">
-                  Database Storage
+                <div className="text-5xl font-black mb-1 text-white tracking-tight">
+                  {negativeFeedbacks.filter((f) => Boolean(f.message || f.customerNote)).length}
                 </div>
-                <p className="text-[10px] text-stone-400 mt-2 font-mono uppercase tracking-wider">
-                  Real-Time Encrypted Storage
+                <p className="text-[11px] text-amber-400 font-mono uppercase tracking-wider">
+                  {newNegativeCount} Pending Follow-up
                 </p>
               </div>
             </div>
@@ -856,49 +892,56 @@ export function GatedDashboard({
             </div>
 
             {/* ==================================================================== */}
-            {/* PRIVATE FEEDBACK INBOX */}
+            {/* NEGATIVE FEEDBACK MESSAGES FEED */}
             {/* ==================================================================== */}
             <div
-              id="private-feedback-inbox"
+              id="negative-feedback-feed"
               className="bg-[#161616] border border-white/10 rounded-xl overflow-hidden shadow-lg space-y-0"
             >
               <div className="p-6 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#1C1C1C]">
                 <div>
                   <div className="flex items-center gap-2.5">
                     <h2 className="text-xl font-black uppercase tracking-tight text-white">
-                      Customer Feedback Inbox
+                      Negative Feedback Messages Feed
                     </h2>
                     <span className="px-2.5 py-0.5 rounded text-[11px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                      {feedbacks.length} Messages
+                      {negativeFeedbacks.length} Negative Messages
                     </span>
                   </div>
                   <p className="text-xs text-stone-400 font-medium mt-1">
-                    Customer feedback submitted from the in-store rating page. Review notes and follow up directly.
+                    Customer complaints and private notes submitted when tapping Thumbs Down. Kept strictly private to your dashboard.
                   </p>
                 </div>
 
                 {/* Filter tabs */}
                 <div className="flex items-center gap-1 bg-[#0A0A0A] p-1 border border-white/10 rounded text-xs">
-                  {(["all", "new", "reviewed", "resolved"] as const).map((filter) => (
-                    <button
-                      key={filter}
-                      onClick={() => setStatusFilter(filter)}
-                      className={`px-3 py-1.5 rounded uppercase font-black tracking-wider transition cursor-pointer text-[11px] ${
-                        statusFilter === filter
-                          ? "bg-emerald-500 text-black shadow-xs font-black"
-                          : "text-stone-400 hover:text-white"
-                      }`}
-                    >
-                      {filter}
-                    </button>
-                  ))}
+                  {(["all", "new", "reviewed", "resolved"] as const).map((filter) => {
+                    const count =
+                      filter === "all"
+                        ? negativeFeedbacks.length
+                        : negativeFeedbacks.filter((f) => f.status === filter).length;
+                    return (
+                      <button
+                        key={filter}
+                        onClick={() => setStatusFilter(filter)}
+                        className={`px-3 py-1.5 rounded uppercase font-black tracking-wider transition cursor-pointer text-[11px] flex items-center gap-1 ${
+                          statusFilter === filter
+                            ? "bg-emerald-500 text-black shadow-xs font-black"
+                            : "text-stone-400 hover:text-white"
+                        }`}
+                      >
+                        <span>{filter}</span>
+                        <span className="opacity-75 font-mono text-[10px]">({count})</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               {/* Table Header (Desktop) */}
               <div className="hidden md:grid grid-cols-12 gap-4 p-4 border-b border-white/10 bg-white/[0.02] items-center text-[10px] font-black opacity-60 uppercase tracking-widest text-stone-300">
                 <div className="col-span-2">Date / Time</div>
-                <div className="col-span-7">Customer Note & Contact</div>
+                <div className="col-span-7">Negative Message & Customer Contact</div>
                 <div className="col-span-3 text-right">Status & Action</div>
               </div>
 
@@ -908,20 +951,23 @@ export function GatedDashboard({
                   <div className="w-6 h-6 border-2 border-white/20 border-t-emerald-500 rounded-full animate-spin mx-auto mb-3" />
                   Loading feedback collection...
                 </div>
-              ) : filteredFeedbacks.length === 0 ? (
+              ) : filteredNegativeFeedbacks.length === 0 ? (
                 <div className="py-16 text-center text-stone-400 space-y-3">
                   <MessageSquare className="w-8 h-8 text-stone-600 mx-auto" />
                   <p className="text-sm font-bold uppercase tracking-wider text-stone-200">
-                    No customer feedback yet
+                    {negativeFeedbacks.length === 0
+                      ? "No negative feedback messages yet"
+                      : `No ${statusFilter} negative messages`}
                   </p>
                   <p className="text-xs text-stone-400 max-w-sm mx-auto">
-                    When customers submit feedback through your in-store NFC or QR link, their messages will
-                    appear here for review.
+                    {negativeFeedbacks.length === 0
+                      ? "When customers tap Thumbs Down and leave details, their text messages will appear here for private resolution."
+                      : `No messages currently found with "${statusFilter}" status.`}
                   </p>
                 </div>
               ) : (
                 <div className="divide-y divide-white/5">
-                  {filteredFeedbacks.map((fb) => (
+                  {filteredNegativeFeedbacks.map((fb) => (
                     <div
                       key={fb.id}
                       className={`p-5 transition flex flex-col md:grid md:grid-cols-12 md:items-center gap-4 hover:bg-white/[0.02] ${
@@ -945,7 +991,7 @@ export function GatedDashboard({
                       {/* Customer Note & Contact */}
                       <div className="md:col-span-7 space-y-1.5">
                         <p className="text-sm text-stone-100 font-bold leading-relaxed">
-                          "{fb.customerNote}"
+                          "{fb.message || fb.customerNote || "Thumbs Down rating (no comment provided)."}"
                         </p>
 
                         {(fb.customerName || fb.customerContact) && (

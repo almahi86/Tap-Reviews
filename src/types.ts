@@ -3,6 +3,7 @@ export interface Business {
   ownerUid: string;
   businessName: string;
   googleMapsReviewUrl: string;
+  googleReviewUrl?: string;
   subscriptionStatus: 'active' | 'inactive' | 'trialing' | 'canceled';
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
@@ -13,13 +14,15 @@ export interface Business {
 export interface FeedbackItem {
   id: string;
   businessId: string;
-  rating: 'like' | 'dislike';
-  customerNote: string;
+  sentiment?: 'positive' | 'negative';
+  message?: string;
+  rating?: 'like' | 'dislike';
+  customerNote?: string;
   customerContact?: string;
   customerName?: string;
-  status: 'new' | 'reviewed' | 'resolved';
+  status?: 'new' | 'reviewed' | 'resolved';
   internalNote?: string;
-  createdAt: string;
+  createdAt: string | any;
   updatedAt?: string;
 }
 

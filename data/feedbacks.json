@@ -1,0 +1,32 @@
+[
+  {
+    "id": "fb_1788809527059_pdzny",
+    "businessId": "demo-cafe",
+    "sentiment": "positive",
+    "message": "Customer tapped Thumbs Up",
+    "rating": "like",
+    "customerNote": "Customer tapped Thumbs Up",
+    "status": "reviewed",
+    "createdAt": "2026-09-07T19:32:07.059Z"
+  },
+  {
+    "id": "fb_sample_1",
+    "businessId": "demo-cafe",
+    "rating": "dislike",
+    "customerNote": "The oat milk latte was lukewarm and took 18 minutes to arrive during the morning rush. The barista seemed overwhelmed.",
+    "customerContact": "alex.m@example.com",
+    "customerName": "Alex M.",
+    "status": "new",
+    "createdAt": "2026-09-07T18:47:00.763Z"
+  },
+  {
+    "id": "fb_sample_2",
+    "businessId": "demo-cafe",
+    "rating": "dislike",
+    "customerNote": "The music by the window counter was so loud I couldn't hear my colleague on a call.",
+    "customerContact": "+1 (555) 234-5678",
+    "customerName": "Sarah K. (Table 4)",
+    "status": "reviewed",
+    "createdAt": "2026-09-07T16:32:00.763Z"
+  }
+]

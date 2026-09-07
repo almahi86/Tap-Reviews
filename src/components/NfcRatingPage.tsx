@@ -1,91 +1,100 @@
 import { useState, useEffect, type FormEvent } from "react";
-import { ThumbsUp, ThumbsDown, ExternalLink, Send, CheckCircle2, ArrowLeft, Store, ShieldCheck, Sparkles } from "lucide-react";
+import { ThumbsUp, ThumbsDown, ExternalLink, Send, CheckCircle2, AlertCircle, Store } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { fetchBusiness, submitCustomerFeedback } from "../lib/firebase";
-import type { Business, RatingFlowState } from "../types";
+import type { Business } from "../types";
 
 interface NfcRatingPageProps {
   businessId: string;
-  onNavigateToDashboard?: () => void;
-  isEmbeddedPreview?: boolean;
 }
 
-export function NfcRatingPage({
-  businessId,
-  onNavigateToDashboard,
-  isEmbeddedPreview = false,
-}: NfcRatingPageProps) {
+type RatingState = "initial" | "redirecting" | "negative_form" | "submitted" | "unavailable";
+
+export function NfcRatingPage({ businessId }: NfcRatingPageProps) {
   const [business, setBusiness] = useState<Business | null>(null);
   const [loading, setLoading] = useState(true);
-  const [flowState, setFlowState] = useState<RatingFlowState>("initial");
-  const [customerNote, setCustomerNote] = useState("");
-  const [customerName, setCustomerName] = useState("");
-  const [customerContact, setCustomerContact] = useState("");
+  const [state, setState] = useState<RatingState>("initial");
+  const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [redirectCountdown, setRedirectCountdown] = useState(2);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
-    async function load() {
+    async function loadBusiness() {
       try {
         setLoading(true);
-        const data = await fetchBusiness(businessId);
-        if (isMounted) {
-          setBusiness(data);
+        const biz = await fetchBusiness(businessId);
+        if (!isMounted) return;
+
+        // If the business doesn't exist or their subscription is inactive, show fallback message
+        if (!biz || biz.subscriptionStatus !== "active") {
+          setBusiness(biz);
+          setState("unavailable");
+        } else {
+          setBusiness(biz);
+          setState("initial");
         }
       } catch (err) {
-        console.error("Failed to load business profile for NFC tap:", err);
+        console.error("Error loading business for rating:", err);
+        if (isMounted) setState("unavailable");
       } finally {
         if (isMounted) setLoading(false);
       }
     }
-    load();
+
+    loadBusiness();
     return () => {
       isMounted = false;
     };
   }, [businessId]);
 
-  // Handle Like Action -> Redirect to Google Maps review URL
-  const handleLikeClick = () => {
-    setFlowState("redirecting_like");
-    const targetUrl =
+  // Routing Logic: Thumbs Up
+  // Save a record to businesses/[businessId]/feedbacks with { sentiment: 'positive', createdAt: serverTimestamp() }
+  // then trigger window.location.href to the business's googleReviewUrl
+  const handleThumbsUp = async () => {
+    setState("redirecting");
+
+    const reviewUrl =
+      business?.googleReviewUrl ||
       business?.googleMapsReviewUrl ||
       "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4";
 
-    // Start a short, clear countdown for seamless UX and iframe safety
-    let count = 2;
-    const interval = setInterval(() => {
-      count -= 1;
-      setRedirectCountdown(count);
-      if (count <= 0) {
-        clearInterval(interval);
-        // Attempt redirect
-        try {
-          // If in an iframe, try window.open or window.top
-          if (window.top && window.top !== window.self) {
-            window.open(targetUrl, "_blank", "noopener,noreferrer");
-          } else {
-            window.location.href = targetUrl;
-          }
-        } catch {
-          window.open(targetUrl, "_blank", "noopener,noreferrer");
-        }
+    try {
+      await submitCustomerFeedback({
+        businessId,
+        sentiment: "positive",
+        rating: "like",
+        status: "reviewed",
+        message: "Customer tapped Thumbs Up",
+        customerNote: "Customer tapped Thumbs Up",
+      });
+    } catch (err) {
+      console.warn("Could not record positive tap:", err);
+    }
+
+    // Trigger redirect to the business's googleReviewUrl
+    setTimeout(() => {
+      try {
+        window.location.href = reviewUrl;
+      } catch {
+        window.open(reviewUrl, "_blank", "noopener,noreferrer");
       }
-    }, 900);
+    }, 600);
   };
 
-  // Handle Dislike Action -> Show apology and private feedback form
-  const handleDislikeClick = () => {
-    setFlowState("dislike_form");
+  // Routing Logic: Thumbs Down
+  // Do not redirect to Google. Instead, reveal a text area asking for details.
+  const handleThumbsDown = () => {
+    setState("negative_form");
     setErrorMessage(null);
   };
 
-  // Handle Submit Dislike Form -> Save privately to Firestore
-  const handleDislikeSubmit = async (e: FormEvent) => {
+  // On submit: Save { sentiment: 'negative', message: [input], createdAt: serverTimestamp() }
+  // and show a "Thank you" screen
+  const handleSubmitNegative = async (e: FormEvent) => {
     e.preventDefault();
-    if (!customerNote.trim()) {
-      setErrorMessage("Please share a few words so we can address this with our staff.");
+    if (!message.trim()) {
+      setErrorMessage("Please enter a few words about what went wrong.");
       return;
     }
 
@@ -95,329 +104,260 @@ export function NfcRatingPage({
     try {
       await submitCustomerFeedback({
         businessId,
+        sentiment: "negative",
+        message: message.trim(),
+        customerNote: message.trim(),
         rating: "dislike",
-        customerNote: customerNote.trim(),
-        customerContact: customerContact.trim() || undefined,
-        customerName: customerName.trim() || undefined,
         status: "new",
       });
-      setFlowState("dislike_submitted");
-    } catch (err: any) {
-      console.error("Error saving private feedback to Firestore:", err);
-      setErrorMessage("Could not deliver your note. Please try again.");
+      setState("submitted");
+    } catch (err) {
+      console.error("Failed to save negative feedback:", err);
+      setErrorMessage("Failed to send feedback. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  return (
-    <div
-      id="nfc-rating-container"
-      className="min-h-screen bg-[#0A0A0A] text-white flex flex-col justify-between items-center px-4 py-8 select-none antialiased font-sans selection:bg-emerald-500 selection:text-black"
-    >
-      {/* Top Bar / Brand Badge */}
-      <header className="w-full max-w-md flex items-center justify-between text-xs text-stone-400 mb-6 px-1">
-        <div className="flex items-center gap-2 font-mono uppercase tracking-widest text-[11px] text-emerald-400 font-bold">
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <span>{business?.businessName ? `${business.businessName} • NFC Tap` : "Verified In-Store NFC Tap"}</span>
+  // Fallback View: Business doesn't exist or subscription is inactive
+  if (!loading && (state === "unavailable" || !business || business.subscriptionStatus !== "active")) {
+    return (
+      <main
+        id="rating-unavailable"
+        className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center p-6 select-none font-sans"
+      >
+        <div className="w-full max-w-sm bg-[#161616] border border-white/10 rounded-2xl p-8 text-center shadow-2xl space-y-4">
+          <div className="w-14 h-14 rounded-full bg-stone-800/80 border border-white/10 flex items-center justify-center mx-auto text-stone-400">
+            <AlertCircle className="w-7 h-7 text-stone-400" />
+          </div>
+          <div className="space-y-1.5">
+            <h1 className="text-xl font-black uppercase tracking-tight text-white">
+              Feedback form unavailable.
+            </h1>
+            <p className="text-xs text-stone-400 leading-relaxed">
+              This feedback portal is currently inactive or cannot be found. Please check back later or contact the business directly.
+            </p>
+          </div>
         </div>
-        {onNavigateToDashboard && (
-          <button
-            id="btn-return-dashboard"
-            onClick={onNavigateToDashboard}
-            className="text-stone-400 hover:text-white font-black uppercase tracking-wider text-[11px] transition cursor-pointer"
-          >
-            Owner Dashboard →
-          </button>
-        )}
-      </header>
+      </main>
+    );
+  }
 
-      {/* Main Mobile Screen Box */}
-      <main className="w-full max-w-md bg-[#161616] rounded-2xl shadow-2xl border border-white/10 p-6 sm:p-8 flex flex-col justify-center">
+  return (
+    <main
+      id="standalone-rating-page"
+      className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center p-4 sm:p-6 select-none font-sans antialiased selection:bg-emerald-500 selection:text-black"
+    >
+      <div className="w-full max-w-md bg-[#141414] rounded-2xl border border-white/10 shadow-2xl p-6 sm:p-8">
         {loading ? (
           <div className="py-16 text-center space-y-3">
-            <div className="w-10 h-10 border-2 border-white/20 border-t-emerald-500 rounded-full animate-spin mx-auto" />
+            <div className="w-8 h-8 border-2 border-white/20 border-t-emerald-500 rounded-full animate-spin mx-auto" />
             <p className="text-xs font-mono uppercase tracking-wider text-stone-400">
-              Connecting to store NFC tag...
+              Loading feedback form...
             </p>
           </div>
         ) : (
           <AnimatePresence mode="wait">
-            {/* VIEW 1: INITIAL TWO BUTTON PROMPT */}
-            {flowState === "initial" && (
+            {/* SCREEN 1: TWO BUTTONS (THUMBS UP & THUMBS DOWN) */}
+            {state === "initial" && (
               <motion.div
                 key="initial"
-                initial={{ opacity: 0, y: 12 }}
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -12 }}
+                exit={{ opacity: 0, y: -8 }}
                 className="text-center space-y-6"
               >
-                {/* Store Header */}
-                <div className="space-y-1.5">
-                  <div className="inline-flex items-center justify-center w-12 h-12 rounded bg-emerald-500 text-black font-black text-xl mb-2">
+                {/* Business Name Display */}
+                <div className="space-y-2">
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-emerald-500 text-black shadow-lg mx-auto">
                     <Store className="w-6 h-6" />
                   </div>
-                  <h1 className="text-2xl font-black uppercase tracking-tight text-white">
-                    {business?.businessName || "Welcome to our store"}
+                  <h1
+                    id="business-name-header"
+                    className="text-2xl sm:text-3xl font-black uppercase tracking-tight text-white"
+                  >
+                    {business?.businessName || "Our Store"}
                   </h1>
-                  <p className="text-xs font-mono uppercase tracking-widest text-emerald-400 font-bold">
-                    Direct Feedback Touchpoint
+                  <p className="text-xs text-stone-400 font-medium">
+                    How was your experience today?
                   </p>
                 </div>
 
-                {/* Primary Question */}
-                <div className="pt-2 pb-1 border-t border-b border-white/5 py-4">
-                  <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tighter uppercase leading-tight">
-                    How was your<br />experience today?
-                  </h2>
-                  <p className="text-xs text-stone-400 mt-2 font-medium">
-                    Your tap takes only 2 seconds and helps our team improve.
-                  </p>
-                </div>
-
-                {/* The Two Large Mobile Buttons */}
+                {/* Two Action Buttons: Thumbs Up and Thumbs Down */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                  {/* LIKE BUTTON */}
+                  {/* THUMBS UP */}
                   <button
-                    id="btn-rating-like"
-                    onClick={handleLikeClick}
-                    className="group relative flex flex-col items-center justify-center gap-2 p-6 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-black transition shadow-lg cursor-pointer min-h-[130px]"
+                    id="btn-thumbs-up"
+                    type="button"
+                    onClick={handleThumbsUp}
+                    className="group flex flex-col items-center justify-center gap-3 p-6 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-black transition shadow-lg cursor-pointer min-h-[140px]"
                   >
                     <div className="w-12 h-12 rounded-full bg-black/10 flex items-center justify-center group-hover:scale-110 transition-transform">
-                      <ThumbsUp className="w-6 h-6 text-black" />
+                      <ThumbsUp className="w-7 h-7 text-black fill-current" />
                     </div>
-                    <span className="text-2xl font-black uppercase tracking-tight">Like</span>
-                    <span className="text-[10px] font-black uppercase tracking-wider opacity-80">
-                      It was great!
+                    <span className="text-xl font-black uppercase tracking-tight">
+                      Thumbs Up
                     </span>
                   </button>
 
-                  {/* DISLIKE BUTTON */}
+                  {/* THUMBS DOWN */}
                   <button
-                    id="btn-rating-dislike"
-                    onClick={handleDislikeClick}
-                    className="group relative flex flex-col items-center justify-center gap-2 p-6 rounded-xl bg-[#1C1C1C] hover:bg-[#242424] active:scale-95 text-white font-black border border-white/10 hover:border-white/20 transition cursor-pointer min-h-[130px]"
+                    id="btn-thumbs-down"
+                    type="button"
+                    onClick={handleThumbsDown}
+                    className="group flex flex-col items-center justify-center gap-3 p-6 rounded-xl bg-[#1F1F1F] hover:bg-[#282828] active:scale-95 text-white font-black border border-white/10 hover:border-white/20 transition cursor-pointer min-h-[140px]"
                   >
                     <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center group-hover:scale-110 transition-transform">
-                      <ThumbsDown className="w-6 h-6 text-rose-400" />
+                      <ThumbsDown className="w-7 h-7 text-rose-400 fill-current" />
                     </div>
-                    <span className="text-2xl font-black uppercase tracking-tight">Dislike</span>
-                    <span className="text-[10px] font-black uppercase tracking-wider text-stone-400">
-                      Could be better
+                    <span className="text-xl font-black uppercase tracking-tight text-stone-200">
+                      Thumbs Down
                     </span>
                   </button>
-                </div>
-
-                <div className="text-[10px] uppercase font-mono tracking-widest text-stone-500 pt-2 flex items-center justify-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span>Direct private connection to store management</span>
                 </div>
               </motion.div>
             )}
 
-            {/* VIEW 2: LIKE REDIRECT SCREEN */}
-            {flowState === "redirecting_like" && (
+            {/* SCREEN 2: REDIRECTING TO GOOGLE REVIEW */}
+            {state === "redirecting" && (
               <motion.div
                 key="redirecting"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0 }}
-                className="text-center py-6 space-y-6"
+                className="text-center py-6 space-y-5"
               >
-                <div className="w-16 h-16 rounded-full bg-emerald-500 text-black flex items-center justify-center mx-auto ring-8 ring-emerald-500/20 font-black text-2xl">
-                  <Sparkles className="w-8 h-8" />
+                <div className="w-16 h-16 rounded-full bg-emerald-500 text-black flex items-center justify-center mx-auto ring-8 ring-emerald-500/20">
+                  <ThumbsUp className="w-8 h-8 fill-current" />
                 </div>
+
                 <div className="space-y-2">
-                  <p className="text-emerald-400 font-mono text-xs uppercase font-bold tracking-widest">
-                    Google Review Boost
-                  </p>
-                  <h3 className="text-3xl font-black uppercase tracking-tight text-white leading-tight">
-                    We’re thrilled you enjoyed<br />{business?.businessName || "your visit"}!
-                  </h3>
-                  <p className="text-xs text-stone-400 max-w-xs mx-auto leading-relaxed">
-                    Redirecting you to share your positive rating for {business?.businessName || "us"} on Google Maps in{" "}
-                    <span className="font-black text-emerald-400 font-mono text-sm">{redirectCountdown}s</span>...
+                  <h2 className="text-2xl font-black uppercase tracking-tight text-white">
+                    Thank you!
+                  </h2>
+                  <p className="text-xs text-stone-300 leading-relaxed max-w-xs mx-auto">
+                    Redirecting you to share your positive review for{" "}
+                    <strong>{business?.businessName || "us"}</strong> on Google...
                   </p>
                 </div>
 
                 <div className="pt-2">
                   <a
-                    id="link-manual-google-review"
+                    id="link-google-review-fallback"
                     href={
+                      business?.googleReviewUrl ||
                       business?.googleMapsReviewUrl ||
                       "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4"
                     }
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center gap-2 w-full py-4 px-6 rounded bg-emerald-500 text-black font-black uppercase tracking-wider text-xs hover:bg-emerald-400 active:scale-98 transition shadow-lg"
+                    className="inline-flex items-center justify-center gap-2 w-full py-3.5 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase tracking-wider text-xs transition shadow-md"
                   >
-                    <span>Open Google Review Now</span>
+                    <span>Click here if not redirected</span>
                     <ExternalLink className="w-4 h-4" />
                   </a>
                 </div>
-
-                <button
-                  onClick={() => setFlowState("initial")}
-                  className="text-xs text-stone-400 hover:text-white uppercase font-bold tracking-wider underline pt-2 cursor-pointer"
-                >
-                  ← Back to rating options
-                </button>
               </motion.div>
             )}
 
-            {/* VIEW 3: DISLIKE APOLOGY & PRIVATE FORM */}
-            {flowState === "dislike_form" && (
+            {/* SCREEN 3: THUMBS DOWN - TEXT AREA ASKING FOR DETAILS */}
+            {state === "negative_form" && (
               <motion.div
-                key="dislike_form"
-                initial={{ opacity: 0, y: 10 }}
+                key="negative_form"
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
+                exit={{ opacity: 0, y: -8 }}
                 className="space-y-5 text-left"
               >
-                <div className="space-y-1.5 border-b border-white/10 pb-4">
-                  <button
-                    onClick={() => setFlowState("initial")}
-                    className="inline-flex items-center gap-1 text-[11px] font-black uppercase tracking-wider text-stone-400 hover:text-white mb-2 cursor-pointer"
-                  >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    <span>Back</span>
-                  </button>
-                  <p className="text-xs font-mono uppercase tracking-widest text-rose-400 font-bold">
-                    Private Recovery Shield
-                  </p>
-                  <h3 className="text-2xl font-black uppercase tracking-tight text-white leading-tight">
-                    We’re so sorry.<br />What went wrong?
-                  </h3>
-                  <p className="text-xs text-stone-400">
-                    Your feedback is saved privately to {business?.businessName ? `${business.businessName}'s` : "our"} management inbox so we can fix it immediately.
+                <div className="space-y-1.5 border-b border-white/10 pb-3">
+                  <h2 className="text-2xl font-black uppercase tracking-tight text-white">
+                    What went wrong?
+                  </h2>
+                  <p className="text-xs text-stone-400 leading-relaxed">
+                    Please tell us what happened so {business?.businessName ? `${business.businessName}'s team` : "we"} can make it right.
                   </p>
                 </div>
 
-                <form onSubmit={handleDislikeSubmit} className="space-y-4">
+                <form onSubmit={handleSubmitNegative} className="space-y-4">
                   {errorMessage && (
-                    <div className="text-xs bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded">
+                    <div className="text-xs bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-lg">
                       {errorMessage}
                     </div>
                   )}
 
                   <div className="space-y-1.5">
                     <label
-                      htmlFor="customer-note-textarea"
-                      className="block text-[10px] font-black uppercase tracking-wider text-stone-300"
+                      htmlFor="negative-feedback-textarea"
+                      className="block text-[11px] font-black uppercase tracking-wider text-stone-300"
                     >
-                      Your Experience <span className="text-rose-400">*</span>
+                      Details <span className="text-rose-400">*</span>
                     </label>
                     <textarea
-                      id="customer-note-textarea"
-                      rows={4}
+                      id="negative-feedback-textarea"
+                      rows={5}
                       required
-                      value={customerNote}
-                      onChange={(e) => setCustomerNote(e.target.value)}
-                      placeholder="Please let us know what happened (e.g. food quality, wait time, noise, service)..."
-                      className="w-full text-xs font-mono p-3.5 rounded border border-white/20 bg-[#0A0A0A] text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition resize-none"
+                      value={message}
+                      onChange={(e) => setMessage(e.target.value)}
+                      placeholder="Please share what happened..."
+                      className="w-full text-xs font-sans p-3.5 rounded-lg border border-white/20 bg-[#0A0A0A] text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition resize-none placeholder:text-stone-500"
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    <div className="space-y-1">
-                      <label
-                        htmlFor="customer-name-input"
-                        className="block text-[10px] font-black uppercase tracking-wider text-stone-300"
-                      >
-                        Your Name (Optional)
-                      </label>
-                      <input
-                        id="customer-name-input"
-                        type="text"
-                        value={customerName}
-                        onChange={(e) => setCustomerName(e.target.value)}
-                        placeholder="e.g. Table 5 / Alex"
-                        className="w-full text-xs font-mono p-3 rounded border border-white/20 bg-[#0A0A0A] text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label
-                        htmlFor="customer-contact-input"
-                        className="block text-[10px] font-black uppercase tracking-wider text-stone-300"
-                      >
-                        Email or Phone (Optional)
-                      </label>
-                      <input
-                        id="customer-contact-input"
-                        type="text"
-                        value={customerContact}
-                        onChange={(e) => setCustomerContact(e.target.value)}
-                        placeholder="For manager remedy"
-                        className="w-full text-xs font-mono p-3 rounded border border-white/20 bg-[#0A0A0A] text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
-                      />
-                    </div>
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setState("initial")}
+                      className="py-3 px-4 rounded-lg bg-transparent hover:bg-white/5 text-stone-400 hover:text-white font-black text-xs uppercase tracking-wider transition cursor-pointer border border-white/10"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      id="btn-submit-feedback"
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="flex-1 py-3.5 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:scale-98 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 shadow-md"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                          <span>Submitting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Submit Feedback</span>
+                        </>
+                      )}
+                    </button>
                   </div>
-
-                  <button
-                    id="btn-submit-private-feedback"
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full py-4 px-4 rounded bg-emerald-500 hover:bg-emerald-400 active:scale-98 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 shadow-md mt-2"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                        <span>Sending to management...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Send className="w-4 h-4" />
-                        <span>Send Feedback Privately</span>
-                      </>
-                    )}
-                  </button>
                 </form>
               </motion.div>
             )}
 
-            {/* VIEW 4: DISLIKE SUBMITTED THANK YOU */}
-            {flowState === "dislike_submitted" && (
+            {/* SCREEN 4: THANK YOU SCREEN */}
+            {state === "submitted" && (
               <motion.div
                 key="submitted"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="text-center py-6 space-y-5"
+                className="text-center py-6 space-y-4"
               >
                 <div className="w-16 h-16 rounded-full bg-emerald-500 text-black flex items-center justify-center mx-auto">
                   <CheckCircle2 className="w-9 h-9" />
                 </div>
                 <div className="space-y-2">
-                  <h3 className="text-3xl font-black uppercase tracking-tight text-white">
-                    Thank you for<br />helping us improve
-                  </h3>
+                  <h2 className="text-2xl font-black uppercase tracking-tight text-white">
+                    Thank you
+                  </h2>
                   <p className="text-xs text-stone-400 max-w-xs mx-auto leading-relaxed">
-                    Your note was saved privately in {business?.businessName ? `${business.businessName}'s` : "the store owner's"} dashboard. It will never appear on public review sites.
+                    Thank you for sharing your feedback with {business?.businessName || "us"}. Your comments have been sent directly to management.
                   </p>
-                </div>
-                <div className="pt-4">
-                  <button
-                    id="btn-reset-rating"
-                    onClick={() => {
-                      setFlowState("initial");
-                      setCustomerNote("");
-                      setCustomerContact("");
-                      setCustomerName("");
-                    }}
-                    className="text-xs font-black uppercase tracking-wider text-emerald-400 hover:text-emerald-300 underline py-2 cursor-pointer"
-                  >
-                    Rate another experience
-                  </button>
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
         )}
-      </main>
-
-      {/* Footer Branding */}
-      <footer className="w-full max-w-sm text-center text-[10px] font-mono uppercase tracking-widest text-stone-500 mt-6 space-y-1">
-        <p>© {new Date().getFullYear()} TapShield • Customer Feedback Routing</p>
-      </footer>
-    </div>
+      </div>
+    </main>
   );
 }

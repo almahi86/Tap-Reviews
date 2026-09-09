@@ -9,6 +9,11 @@
           "type": "string",
           "description": "Firebase Auth UID of the business owner."
         },
+        "ownerEmail": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Email address of the business owner for multi-device cross-referencing."
+        },
         "businessName": {
           "type": "string",
           "maxLength": 100,
@@ -26,7 +31,7 @@
         },
         "subscriptionStatus": {
           "type": "string",
-          "enum": ["active", "inactive", "trialing", "canceled"],
+          "enum": ["active", "inactive", "trialing", "canceled", "past_due"],
           "description": "Current Stripe billing subscription status."
         },
         "stripeCustomerId": {
@@ -91,6 +96,15 @@
           "type": "string",
           "enum": ["new", "reviewed", "resolved"],
           "description": "Internal triage status on the dashboard."
+        },
+        "replies": {
+          "type": "array",
+          "description": "Log of replies dispatched to the customer by the business in the system."
+        },
+        "lastRepliedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when business last replied to this customer feedback."
         },
         "createdAt": {
           "type": "string",

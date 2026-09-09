@@ -31,10 +31,10 @@ interface LandingPageProps {
   onEnterDashboard: () => void;
   onOpenCustomerRateView: () => void;
   onUserAuthChange: (user: AuthUserProfile | null) => void;
+  onSignOut?: () => void;
   onSubscribe: (interval: "month" | "year") => Promise<void>;
   onActivateSandbox?: () => void;
   isCheckingOut: boolean;
-  onPreviewCodeReceived?: (code: string) => void;
 }
 
 export function LandingPage({
@@ -43,9 +43,9 @@ export function LandingPage({
   onEnterDashboard,
   onOpenCustomerRateView,
   onUserAuthChange,
+  onSignOut,
   onSubscribe,
   isCheckingOut,
-  onPreviewCodeReceived,
 }: LandingPageProps) {
   const [billingCycle, setBillingCycle] = useState<"month" | "year">("year");
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -112,9 +112,15 @@ export function LandingPage({
                   Subscribe to Access
                 </button>
                 <button
-                  onClick={() => onUserAuthChange(null)}
+                  onClick={() => {
+                    if (onSignOut) {
+                      onSignOut();
+                    } else {
+                      onUserAuthChange(null);
+                    }
+                  }}
                   title="Sign Out"
-                  className="p-2 text-stone-400 hover:text-white"
+                  className="p-2 text-stone-400 hover:text-white cursor-pointer"
                 >
                   <LogOut className="w-4 h-4" />
                 </button>
@@ -783,11 +789,8 @@ export function LandingPage({
       <AuthModal
         isOpen={showLoginModal}
         onClose={() => setShowLoginModal(false)}
-        onAuthSuccess={(user, previewCode) => {
+        onAuthSuccess={(user) => {
           onUserAuthChange(user);
-          if (previewCode && onPreviewCodeReceived) {
-            onPreviewCodeReceived(previewCode);
-          }
           // Direct user to pay first if they do not yet have an active subscription
           if (!isSubscribed) {
             onSubscribe(billingCycle);

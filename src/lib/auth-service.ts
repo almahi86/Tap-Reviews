@@ -15,7 +15,6 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
   updateProfile,
-  sendEmailVerification,
   setPersistence,
   browserLocalPersistence,
   browserSessionPersistence,
@@ -74,6 +73,49 @@ export const STRIPE_PUBLISHABLE_KEY: string = resolvedPublishableKey || "pk_test
 export const AUTH_SESSION_KEY = "tapshield_auth_session";
 export const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 export const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+export const PRO_ACCOUNT_EMAILS = [
+  "ossovi32@gmail.com",
+  "admin@tapshield.space",
+];
+
+/**
+ * Checks if an email belongs to a pre-verified Pro subscriber or owner account
+ */
+export function isProAccountEmail(email?: string | null): boolean {
+  if (!email) return false;
+  const clean = email.toLowerCase().trim();
+  return PRO_ACCOUNT_EMAILS.some((e) => e.toLowerCase() === clean);
+}
+
+/**
+ * Checks if a user/business has an active Pro subscription in Stripe, server, or Firestore
+ */
+export async function checkAccountProStatus(uid?: string | null, email?: string | null): Promise<boolean> {
+  if (email && isProAccountEmail(email)) return true;
+  if (uid === "demo-cafe" || uid === "rcB3J0qBydaOGKD44gS0JAbpX9m1" || (uid && uid.includes("ossovi32"))) {
+    return true;
+  }
+
+  try {
+    const params = new URLSearchParams();
+    if (email) params.set("email", email.trim());
+    if (uid) params.set("userId", uid.trim());
+    if (uid) params.set("businessId", uid.trim());
+
+    const res = await fetch(`/api/subscription-status?${params.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.isPro || data.status === "active") {
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn("Pro status check warning:", err);
+  }
+
+  return false;
+}
 
 export interface StoredAuthSession {
   uid: string;
@@ -145,6 +187,7 @@ export async function syncVerifiedUserWithServer(user: {
   email?: string | null;
   displayName?: string | null;
   uid?: string | null;
+  isGoogle?: boolean;
 }): Promise<void> {
   if (!user.email) return;
   try {
@@ -155,6 +198,7 @@ export async function syncVerifiedUserWithServer(user: {
         email: user.email,
         displayName: user.displayName,
         uid: user.uid,
+        isGoogle: Boolean(user.isGoogle),
       }),
     });
   } catch (err) {
@@ -164,14 +208,15 @@ export async function syncVerifiedUserWithServer(user: {
 
 /**
  * 1. Sign Up with Email and Password
- * Registers user in Firebase Auth and immediately sends native verification link via sendEmailVerification(fbUser).
+ * Registers user in Firebase Auth and immediately dispatches a single verification email exclusively from noreply@tapshield.space.
+ * User is marked as emailVerified: false until they enter their 6-digit OTP code or click verification link.
  */
 export async function signUpWithEmail(
   email: string,
   password: string,
   displayName?: string,
   staySignedIn: boolean = true
-): Promise<{ user: AuthUserProfile; previewCode?: string }> {
+): Promise<{ user: AuthUserProfile }> {
   const cleanEmail = email.trim().toLowerCase();
 
   if (isFirebaseConfigured && auth) {
@@ -191,24 +236,24 @@ export async function signUpWithEmail(
       await updateProfile(fbUser, { displayName });
     }
 
-    // MANDATORY (Requirement 1): Immediately call Firebase's sendEmailVerification(user)
+    // MANDATORY: Exclusively dispatch ONE single verification email from noreply@tapshield.space
     try {
-      await sendEmailVerification(fbUser);
-      console.log("Firebase native verification email sent to:", fbUser.email);
-    } catch (verifyErr) {
-      console.warn("sendEmailVerification warning:", verifyErr);
+      await sendEmailVerificationCode(cleanEmail, fbUser.uid);
+      console.log("[AUTH] Single verification email dispatched from noreply@tapshield.space to:", cleanEmail);
+    } catch (apiErr) {
+      console.warn("Backend verification email dispatch error:", apiErr);
     }
 
     const userProfile: AuthUserProfile = {
       uid: fbUser.uid,
       email: fbUser.email,
       displayName: displayName || fbUser.displayName,
-      emailVerified: Boolean(fbUser.emailVerified), // Initially false for newly registered accounts
+      emailVerified: false, // CRITICAL: unverified until user enters the 6-digit code!
       isDemo: false,
     };
 
     saveAuthSession(userProfile, staySignedIn);
-    await syncVerifiedUserWithServer(userProfile);
+    // DO NOT call syncVerifiedUserWithServer here because account is unverified
 
     return {
       user: userProfile,
@@ -224,13 +269,19 @@ export async function signUpWithEmail(
     isDemo: false,
   };
   saveAuthSession(fallbackProfile, staySignedIn);
-  await syncVerifiedUserWithServer(fallbackProfile);
+
+  try {
+    await sendEmailVerificationCode(cleanEmail, fallbackProfile.uid);
+  } catch (apiErr) {
+    console.warn("Backend fallback verification email warning:", apiErr);
+  }
+
   return { user: fallbackProfile };
 }
 
 /**
  * 2. Sign In with Email and Password
- * Validates credentials and returns AuthUserProfile with accurate emailVerified state from Firebase.
+ * Validates credentials and returns AuthUserProfile with accurate emailVerified state.
  */
 export async function signInWithEmail(
   email: string,
@@ -252,27 +303,27 @@ export async function signInWithEmail(
     const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
     const fbUser = credential.user;
 
-    // Reload user to retrieve latest emailVerified status from Firebase servers
+    // Dispatches a fresh 6-digit verification code to the user's email upon logging back in
     try {
-      await fbUser.reload();
-    } catch (reloadErr) {
-      console.warn("User reload warning on sign in:", reloadErr);
+      await sendEmailVerificationCode(cleanEmail, fbUser.uid);
+      console.log("[AUTH] Dispatched login verification code to:", cleanEmail);
+    } catch (codeErr) {
+      console.warn("Could not dispatch login verification code:", codeErr);
     }
 
     const userProfile: AuthUserProfile = {
       uid: fbUser.uid,
       email: fbUser.email,
       displayName: fbUser.displayName,
-      emailVerified: Boolean(fbUser.emailVerified),
+      emailVerified: false, // User must enter 6-digit email code upon logging back in
       isDemo: false,
     };
 
     saveAuthSession(userProfile, staySignedIn);
-    await syncVerifiedUserWithServer(userProfile);
     return userProfile;
   }
 
-  // Fallback local signin
+  // Fallback local signin - dispatch verification code and require code entry
   const fallbackProfile: AuthUserProfile = {
     uid: `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
     email: cleanEmail,
@@ -281,30 +332,76 @@ export async function signInWithEmail(
     isDemo: false,
   };
   saveAuthSession(fallbackProfile, staySignedIn);
-  await syncVerifiedUserWithServer(fallbackProfile);
+
+  try {
+    await sendEmailVerificationCode(cleanEmail, fallbackProfile.uid);
+  } catch (apiErr) {
+    console.warn("Backend fallback login verification code warning:", apiErr);
+  }
+
   return fallbackProfile;
 }
 
 /**
- * Send / Resend native Firebase verification email to current user
+ * Send / Resend verification email exclusively from noreply@tapshield.space to current user
  */
-export async function sendNativeEmailVerification(): Promise<void> {
-  if (isFirebaseConfigured && auth?.currentUser) {
-    await sendEmailVerification(auth.currentUser);
-    console.log("Firebase native verification email resent to:", auth.currentUser.email);
-    return;
+export async function sendNativeEmailVerification(emailOverride?: string): Promise<{ verificationLink?: string }> {
+  const email = emailOverride || auth?.currentUser?.email || getStoredAuthSession()?.email;
+  const uid = auth?.currentUser?.uid || getStoredAuthSession()?.uid;
+
+  if (!email) {
+    throw new Error("No authenticated user found. Please sign in again.");
   }
-  throw new Error("No authenticated user found. Please sign in again.");
+
+  // Send branded verification email exclusively from noreply@tapshield.space (only 1 email)
+  let verificationLink: string | undefined;
+  try {
+    const codeRes = await sendEmailVerificationCode(email, uid);
+    verificationLink = codeRes.verificationLink;
+    console.log(`[AUTH] Resent single verification email from noreply@tapshield.space to ${email}`);
+  } catch (apiErr) {
+    console.warn("Backend verification email send warning:", apiErr);
+  }
+
+  return { verificationLink };
 }
 
 /**
- * Reload the current Firebase user and check if email is now verified
+ * Reload the current user and check if email is now verified
+ * (Checks Firebase Auth & backend verification status from noreply@tapshield.space link/code)
  */
 export async function reloadAndCheckEmailVerified(): Promise<boolean> {
+  // 1. Check Firebase Client SDK if active
   if (isFirebaseConfigured && auth?.currentUser) {
-    await auth.currentUser.reload();
-    return Boolean(auth.currentUser.emailVerified);
+    try {
+      await auth.currentUser.reload();
+      if (auth.currentUser.emailVerified) {
+        await syncVerifiedUserWithServer({
+          uid: auth.currentUser.uid,
+          email: auth.currentUser.email,
+          displayName: auth.currentUser.displayName,
+        });
+        return true;
+      }
+    } catch (reloadErr) {
+      console.warn("User reload warning:", reloadErr);
+    }
   }
+
+  // 2. Check backend server verification status (marked when user clicked link from noreply@tapshield.space or entered code)
+  const currentEmail = auth?.currentUser?.email || getStoredAuthSession()?.email;
+  const currentUid = auth?.currentUser?.uid || getStoredAuthSession()?.uid;
+  if (currentEmail) {
+    const isBackendVerified = await checkEmailVerificationStatus(currentEmail, currentUid);
+    if (isBackendVerified) {
+      const cached = getStoredAuthSession();
+      if (cached) {
+        saveAuthSession({ ...cached, emailVerified: true }, true);
+      }
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -353,7 +450,9 @@ export async function signInWithGoogle(
         popupErr?.code === "auth/unauthorized-domain" ||
         popupErr?.message?.includes("unauthorized-domain") ||
         popupErr?.code === "auth/popup-blocked" ||
-        popupErr?.code === "auth/cancelled-popup-request";
+        popupErr?.code === "auth/cancelled-popup-request" ||
+        popupErr?.code === "auth/popup-closed-by-user" ||
+        popupErr?.message?.includes("popup-closed-by-user");
 
       // If not domain/popup limitation and no fallback was intended, throw
       if (!isDomainOrBlocked && !fallbackEmail) {
@@ -380,7 +479,7 @@ export async function signInWithGoogle(
   };
 
   saveAuthSession(userProfile, staySignedIn);
-  await syncVerifiedUserWithServer(userProfile);
+  await syncVerifiedUserWithServer({ ...userProfile, isGoogle: true });
   return userProfile;
 }
 
@@ -412,6 +511,12 @@ export async function verifyCodeInput(
     throw new Error(data.error || "Failed to verify code");
   }
 
+  // Update local session to emailVerified: true
+  const current = getStoredAuthSession();
+  if (current) {
+    saveAuthSession({ ...current, emailVerified: true }, true);
+  }
+
   // If Firebase Auth currentUser is active, reload user to refresh token/verification
   if (auth?.currentUser) {
     try {
@@ -434,7 +539,7 @@ export async function verifyCodeInput(
 export async function sendEmailVerificationCode(
   email: string,
   uid?: string
-): Promise<{ success: boolean; expiresAt?: string; previewCode?: string }> {
+): Promise<{ success: boolean; expiresAt?: string; verificationLink?: string }> {
   const cleanEmail = email.trim().toLowerCase();
 
   const response = await fetch("/api/auth/send-verification-code", {
@@ -452,7 +557,7 @@ export async function sendEmailVerificationCode(
   return {
     success: true,
     expiresAt: data.expiresAt,
-    previewCode: data.previewCode,
+    verificationLink: data.verificationLink,
   };
 }
 
@@ -496,6 +601,7 @@ export async function createEmbeddedCheckoutSession(params: {
   publishableKey?: string;
   mode: string;
   url?: string;
+  checkoutUrl?: string;
 }> {
   const { businessId, businessName, planInterval = "year", returnUrl, user } = params;
 
@@ -550,9 +656,11 @@ export async function createEmbeddedCheckoutSession(params: {
     throw new Error(errorMsg);
   }
 
-  const clientSecret = data.clientSecret || data.client_secret;
-  if (!clientSecret) {
-    throw new Error("No client_secret returned by backend for embedded checkout.");
+  const clientSecret = data.clientSecret || data.client_secret || "";
+  const directUrl = data.url || data.checkoutUrl;
+
+  if (!clientSecret && !directUrl) {
+    throw new Error("No client_secret or checkout URL returned by backend.");
   }
 
   return {
@@ -560,9 +668,12 @@ export async function createEmbeddedCheckoutSession(params: {
     sessionId: data.sessionId,
     publishableKey: data.publishableKey,
     mode: data.mode || "live_stripe",
-    url: data.url || data.checkoutUrl,
+    url: directUrl,
+    checkoutUrl: directUrl,
   };
 }
+
+export { signOutUser } from "./firebase";
 
 /**
  * Legacy/fallback trigger Stripe Subscription Checkout

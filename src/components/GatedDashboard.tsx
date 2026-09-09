@@ -22,14 +22,25 @@ import {
   Store,
   ThumbsUp,
   ThumbsDown,
+  Mail,
+  Phone,
+  Send,
+  CornerDownRight,
+  CheckCheck,
+  Lock,
+  Settings,
+  RefreshCw,
+  X,
 } from "lucide-react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   fetchBusiness,
   saveBusinessProfile,
   subscribeToFeedbacks,
   getCachedFeedbacks,
+  saveCachedFeedbacks,
   updateFeedbackItemStatus,
+  replyToFeedbackItem,
   signOutUser,
   signInWithGoogle,
   isFirebaseConfigured,
@@ -37,6 +48,8 @@ import {
 import {
   createEmbeddedCheckoutSession,
   triggerStripeSubscriptionCheckout,
+  isProAccountEmail,
+  checkAccountProStatus,
 } from "../lib/auth-service";
 import type { Business, FeedbackItem, AuthUserProfile } from "../types";
 import { WeeklyAnalyticsChart } from "./WeeklyAnalyticsChart";
@@ -47,6 +60,7 @@ interface GatedDashboardProps {
   currentUser: AuthUserProfile | null;
   onOpenCustomerRateView: (businessId: string) => void;
   onUserAuthChange: (user: AuthUserProfile | null) => void;
+  onSignOut?: () => void;
   onBackToLanding?: () => void;
   onOpenAuthModal?: () => void;
 }
@@ -55,6 +69,7 @@ export function GatedDashboard({
   currentUser,
   onOpenCustomerRateView,
   onUserAuthChange,
+  onSignOut,
   onBackToLanding,
   onOpenAuthModal,
 }: GatedDashboardProps) {
@@ -64,12 +79,19 @@ export function GatedDashboard({
       <EmailVerificationScreen
         currentUser={currentUser}
         onVerified={(verifiedUser) => onUserAuthChange(verifiedUser)}
-        onSignOut={() => onUserAuthChange(null)}
+        onSignOut={() => {
+          if (onSignOut) {
+            onSignOut();
+          } else {
+            onUserAuthChange(null);
+          }
+        }}
       />
     );
   }
 
   // Determine current effective business ID: real authenticated user uses their user ID, demo uses demo-cafe
+  const isDemoAccount = Boolean(currentUser?.isDemo || currentUser?.uid === "demo-cafe");
   const effectiveBusinessId =
     currentUser && !currentUser.isDemo ? currentUser.uid : "demo-cafe";
 
@@ -93,6 +115,7 @@ export function GatedDashboard({
     clientSecret: string;
     sessionId: string;
     publishableKey?: string;
+    checkoutUrl?: string;
   } | null>(null);
 
   // Feedback filter
@@ -100,6 +123,12 @@ export function GatedDashboard({
   const [copiedLink, setCopiedLink] = useState(false);
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackItem | null>(null);
   const [internalNoteInput, setInternalNoteInput] = useState("");
+
+  // Business Reply State
+  const [activeReplyFeedbackId, setActiveReplyFeedbackId] = useState<string | null>(null);
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [isSubmittingReply, setIsSubmittingReply] = useState(false);
+  const [replyNotice, setReplyNotice] = useState<{ id: string; message: string; isEmail: boolean } | null>(null);
 
   // Load business profile and subscribe to Firestore feedbacks
   useEffect(() => {
@@ -112,6 +141,7 @@ export function GatedDashboard({
     async function loadData() {
       try {
         setLoading(true);
+        const accountIsPro = isProAccountEmail(currentUser?.email) || isDemoAccount;
         let biz = await fetchBusiness(effectiveBusinessId, currentUser?.email || undefined);
 
         if (!biz) {
@@ -121,23 +151,20 @@ export function GatedDashboard({
             businessName: currentUser?.displayName || "My Store",
             googleMapsReviewUrl: "",
             googleReviewUrl: "",
-            subscriptionStatus: "inactive",
+            subscriptionStatus: accountIsPro ? "active" : "inactive",
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
+        } else if (accountIsPro && biz.subscriptionStatus !== "active") {
+          biz = { ...biz, subscriptionStatus: "active" };
         }
 
-        // If not active yet, check live Stripe subscription for this user
+        // If not active yet, check live Stripe subscription or backend pro status
         if (biz.subscriptionStatus !== "active" && currentUser) {
           try {
-            const checkRes = await fetch(
-              `/api/subscription-status?email=${encodeURIComponent(currentUser.email || "")}&userId=${encodeURIComponent(currentUser.uid)}&businessId=${encodeURIComponent(effectiveBusinessId)}`
-            );
-            if (checkRes.ok) {
-              const checkData = await checkRes.json();
-              if (checkData.isPro || checkData.status === "active") {
-                biz = { ...biz, subscriptionStatus: "active" };
-              }
+            const hasPro = await checkAccountProStatus(currentUser.uid, currentUser.email);
+            if (hasPro) {
+              biz = { ...biz, subscriptionStatus: "active" };
             }
           } catch {}
         }
@@ -146,6 +173,13 @@ export function GatedDashboard({
           setBusiness(biz);
           setGoogleMapsUrl(biz.googleMapsReviewUrl || "");
           setBusinessName(biz.businessName || "My Store");
+
+          // The customer view data shouldn't count till they get the subscription
+          const hasActiveSub = biz.subscriptionStatus === "active" || accountIsPro;
+          if (!hasActiveSub && !isDemoAccount) {
+            saveCachedFeedbacks(effectiveBusinessId, []);
+            setFeedbacks([]);
+          }
         }
 
         // Always subscribe to feedbacks for the effective business
@@ -223,7 +257,7 @@ export function GatedDashboard({
         ownerUid: currentUser?.uid || `owner_${effectiveBusinessId}`,
         businessName: trimmedName,
         googleMapsReviewUrl: googleMapsUrl.trim(),
-        subscriptionStatus: business?.subscriptionStatus === "active" ? "active" : "inactive",
+        subscriptionStatus: (business?.subscriptionStatus === "active" || isProAccountEmail(currentUser?.email)) ? "active" : "inactive",
         createdAt: business?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -237,11 +271,16 @@ export function GatedDashboard({
         user: currentUser,
       });
 
-      if (session?.clientSecret) {
+      if (session?.url || session?.checkoutUrl) {
+        setDirectCheckoutUrl(session.url || session.checkoutUrl);
+      }
+
+      if (session?.clientSecret || session?.url || session?.checkoutUrl) {
         setEmbeddedSession({
-          clientSecret: session.clientSecret,
+          clientSecret: session.clientSecret || "",
           sessionId: session.sessionId,
           publishableKey: session.publishableKey,
+          checkoutUrl: session.url || session.checkoutUrl,
         });
       }
     } catch (err: any) {
@@ -294,6 +333,83 @@ export function GatedDashboard({
     }
   };
 
+  const handleOpenReply = (fb: FeedbackItem) => {
+    setActiveReplyFeedbackId(fb.id);
+    if (!replyDrafts[fb.id]) {
+      setReplyDrafts((prev) => ({
+        ...prev,
+        [fb.id]: "",
+      }));
+    }
+  };
+
+  const handleCloseReply = () => {
+    setActiveReplyFeedbackId(null);
+  };
+
+  const handleSetTemplate = (feedbackId: string, text: string) => {
+    setReplyDrafts((prev) => ({
+      ...prev,
+      [feedbackId]: text,
+    }));
+  };
+
+  const handleSendReply = async (feedback: FeedbackItem) => {
+    const text = replyDrafts[feedback.id]?.trim();
+    if (!text) return;
+
+    setIsSubmittingReply(true);
+    try {
+      const senderName = business?.businessName || currentUser?.displayName || "Management";
+      const isEmail = feedback.customerContact?.includes("@") || false;
+      const method = isEmail ? "email" : feedback.customerContact ? "sms" : "system";
+
+      const res = await replyToFeedbackItem(
+        effectiveBusinessId,
+        feedback.id,
+        text,
+        senderName,
+        method
+      );
+
+      // Update in local state
+      setFeedbacks((prev) =>
+        prev.map((f) => {
+          if (f.id === feedback.id) {
+            const replies = [...(f.replies || []), res.reply];
+            return {
+              ...f,
+              replies,
+              lastRepliedAt: res.reply.sentAt,
+              status: f.status === "new" ? "reviewed" : f.status,
+            };
+          }
+          return f;
+        })
+      );
+
+      setReplyNotice({
+        id: feedback.id,
+        message: res.emailSent
+          ? `Email reply successfully dispatched to ${feedback.customerContact}!`
+          : `Reply logged in system and marked reviewed!`,
+        isEmail: !!res.emailSent,
+      });
+
+      // Clear draft
+      setReplyDrafts((prev) => ({ ...prev, [feedback.id]: "" }));
+      setTimeout(() => {
+        setReplyNotice(null);
+        setActiveReplyFeedbackId(null);
+      }, 2500);
+    } catch (err: any) {
+      console.error("Error sending reply:", err);
+      alert("Failed to send reply: " + (err?.message || "Please try again"));
+    } finally {
+      setIsSubmittingReply(false);
+    }
+  };
+
   // Copy public NFC rating URL
   const publicRatingUrl = `${window.location.origin}/rate/${effectiveBusinessId}`;
   const handleCopyLink = () => {
@@ -302,27 +418,89 @@ export function GatedDashboard({
     setTimeout(() => setCopiedLink(false), 2500);
   };
 
-  const isSubscribed = business?.subscriptionStatus === "active";
+  // Account Settings Modal & Customer Billing Portal
+  const [isAccountSettingsOpen, setIsAccountSettingsOpen] = useState(false);
+  const [isOpeningPortal, setIsOpeningPortal] = useState(false);
+  const [portalError, setPortalError] = useState<string | null>(null);
+  const [portalUrl, setPortalUrl] = useState<string | null>(null);
 
-  const positiveFeedbacks = feedbacks.filter(
+  const handleOpenCustomerPortalOrSettings = async () => {
+    setIsOpeningPortal(true);
+    setPortalError(null);
+    try {
+      const res = await fetch("/api/create-customer-portal-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: effectiveBusinessId,
+          email: currentUser?.email,
+          userId: currentUser?.uid,
+          businessName: businessName || business?.businessName,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.url) {
+        setPortalUrl(data.url);
+        // Stripe Billing Portal sends X-Frame-Options: SAMEORIGIN & frame-ancestors: none
+        // It must always open in a separate tab/window, never in the embedded iframe.
+        try {
+          const newTab = window.open(data.url, "_blank", "noopener,noreferrer");
+          if (!newTab || newTab.closed || typeof newTab.closed === "undefined") {
+            // Popup blocker prevented immediate window opening; the modal renders a direct link
+            console.log("Popup blocked by browser; direct portal link displayed");
+          }
+        } catch (popupErr) {
+          console.warn("Could not open new window automatically:", popupErr);
+        }
+        setIsAccountSettingsOpen(true);
+        return;
+      }
+
+      setIsAccountSettingsOpen(true);
+      if (data.error) {
+        setPortalError(data.error);
+      }
+    } catch (err: any) {
+      console.warn("Could not open billing portal:", err);
+      setIsAccountSettingsOpen(true);
+      setPortalError(err.message || "Unable to reach Stripe billing server");
+    } finally {
+      setIsOpeningPortal(false);
+    }
+  };
+
+  const isSuspended =
+    business?.subscriptionStatus === "past_due" ||
+    business?.subscriptionStatus === "inactive" ||
+    business?.subscriptionStatus === "canceled";
+
+  const isSubscribed = Boolean(
+    !isSuspended && (business?.subscriptionStatus === "active" || (isDemoAccount && !isSuspended))
+  );
+
+  // The customer view data shouldn't count till they get the subscription
+  const effectiveFeedbacks = isSubscribed ? feedbacks : [];
+
+  const positiveFeedbacks = effectiveFeedbacks.filter(
     (f) => f.sentiment === "positive" || f.rating === "like"
   );
-  const negativeFeedbacks = feedbacks.filter(
+  const negativeFeedbacks = effectiveFeedbacks.filter(
     (f) => f.sentiment === "negative" || f.rating === "dislike"
   );
 
-  const totalPositiveTaps = positiveFeedbacks.length;
-  const totalNegativeTaps = negativeFeedbacks.length;
-  const totalTaps = totalPositiveTaps + totalNegativeTaps;
-  const satisfactionRate = totalTaps > 0 ? Math.round((totalPositiveTaps / totalTaps) * 100) : 100;
+  const totalPositiveTaps = isSubscribed ? positiveFeedbacks.length : 0;
+  const totalNegativeTaps = isSubscribed ? negativeFeedbacks.length : 0;
+  const totalTaps = isSubscribed ? totalPositiveTaps + totalNegativeTaps : 0;
+  const satisfactionRate = isSubscribed && totalTaps > 0 ? Math.round((totalPositiveTaps / totalTaps) * 100) : 100;
 
   const filteredNegativeFeedbacks = negativeFeedbacks.filter((f) => {
     if (statusFilter === "all") return true;
     return f.status === statusFilter;
   });
 
-  const newFeedbacksCount = feedbacks.filter((f) => f.status === "new").length;
-  const newNegativeCount = negativeFeedbacks.filter((f) => f.status === "new").length;
+  const newFeedbacksCount = isSubscribed ? effectiveFeedbacks.filter((f) => f.status === "new").length : 0;
+  const newNegativeCount = isSubscribed ? negativeFeedbacks.filter((f) => f.status === "new").length : 0;
 
   return (
     <div id="gated-dashboard" className="min-h-screen bg-[#0A0A0A] text-white pb-16 font-sans selection:bg-emerald-500 selection:text-black">
@@ -346,8 +524,8 @@ export function GatedDashboard({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Back to main website */}
-            {onBackToLanding && (
+            {/* Back to main website (only for guest / non-signed in users) */}
+            {!currentUser && onBackToLanding && (
               <button
                 id="btn-back-to-landing"
                 onClick={onBackToLanding}
@@ -357,15 +535,19 @@ export function GatedDashboard({
               </button>
             )}
 
-            {/* Direct NFC Preview Button */}
-            <button
-              id="btn-open-rate-preview"
-              onClick={() => onOpenCustomerRateView(effectiveBusinessId)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider bg-emerald-500 text-black hover:bg-emerald-400 border border-emerald-400 transition cursor-pointer"
+            {/* Direct Live NFC Card View (Opens standalone unlinked page in new tab) */}
+            <a
+              id="btn-open-live-nfc-page"
+              href={publicRatingUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider bg-emerald-500 text-black hover:bg-emerald-400 border border-emerald-400 transition cursor-pointer shadow-sm"
+              title="Open standalone unlinked customer rating page in a new tab (URL for NFC cards and QR codes)"
             >
               <Smartphone className="w-3.5 h-3.5" />
-              <span>Test Customer View</span>
-            </button>
+              <span>Live NFC Page</span>
+              <ExternalLink className="w-3 h-3 text-black/80" />
+            </a>
 
             {/* User Account / Sign In / Out */}
             {currentUser ? (
@@ -389,10 +571,28 @@ export function GatedDashboard({
                   )}
                 </div>
                 <button
+                  id="btn-open-account-settings-header"
+                  onClick={() => setIsAccountSettingsOpen(true)}
+                  title="Account Settings & Billing"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-[#202020] hover:bg-[#282828] text-stone-200 border border-white/10 transition cursor-pointer"
+                >
+                  <Settings className="w-3.5 h-3.5 text-stone-400" />
+                  <span className="hidden sm:inline">Account Settings</span>
+                  {!isSubscribed && (
+                    <span className="px-1.5 py-0.2 rounded text-[9px] bg-rose-500/20 text-rose-300 font-mono font-bold">
+                      {business?.subscriptionStatus === "past_due" ? "Past Due" : "Locked"}
+                    </span>
+                  )}
+                </button>
+                <button
                   id="btn-sign-out"
                   onClick={async () => {
-                    await signOutUser();
-                    onUserAuthChange(null);
+                    if (onSignOut) {
+                      onSignOut();
+                    } else {
+                      await signOutUser();
+                      onUserAuthChange(null);
+                    }
                   }}
                   title="Sign Out"
                   className="p-1.5 text-stone-400 hover:text-white transition cursor-pointer"
@@ -439,7 +639,12 @@ export function GatedDashboard({
         {/* ==================================================================== */}
         {/* FLOW 1: SUBSCRIPTION GATE (IF NOT SUBSCRIBED) */}
         {/* ==================================================================== */}
-        {!isSubscribed ? (
+        {loading ? (
+          <div className="py-24 text-center">
+            <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-stone-400 text-sm font-medium">Loading your dashboard...</p>
+          </div>
+        ) : !isSubscribed ? (
           <div id="subscription-gate-container" className="py-8 max-w-3xl mx-auto">
             <div className="bg-[#161616] rounded-2xl border border-white/10 shadow-2xl p-6 sm:p-12 text-center space-y-8">
               <div className="w-16 h-16 rounded-full bg-emerald-500 text-black flex items-center justify-center mx-auto ring-8 ring-emerald-500/20 font-black text-2xl">
@@ -447,9 +652,52 @@ export function GatedDashboard({
               </div>
 
               <div className="space-y-3 max-w-lg mx-auto">
-                <p className="text-emerald-500 font-bold uppercase tracking-widest text-xs">
-                  Subscription Required
-                </p>
+                {business?.subscriptionStatus === "past_due" ? (
+                  <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-left space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-rose-200">
+                      <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
+                      <span>Payment Failed — Public Scans Suspended</span>
+                    </div>
+                    <p className="text-xs text-rose-300/90 leading-relaxed">
+                      Your latest subscription renewal payment failed. Public NFC and QR code scans are currently disabled. Update your payment method in the Stripe Customer Portal or re-subscribe below to immediately restore public review routing.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {portalUrl ? (
+                        <a
+                          href={portalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-rose-500 hover:bg-rose-400 text-black font-black uppercase text-[11px] transition cursor-pointer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>Launch Stripe Customer Portal ↗</span>
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleOpenCustomerPortalOrSettings}
+                          disabled={isOpeningPortal}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-black font-black uppercase text-[11px] transition cursor-pointer disabled:opacity-50"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>{isOpeningPortal ? "Connecting to Stripe..." : "Update Card in Stripe Portal"}</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setIsAccountSettingsOpen(true)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-stone-200 font-bold uppercase text-[11px] transition cursor-pointer"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                        <span>Account Details</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-emerald-500 font-bold uppercase tracking-widest text-xs">
+                    Subscription Required
+                  </p>
+                )}
                 <h2 className="text-4xl sm:text-6xl font-black text-white tracking-tighter leading-none uppercase">
                   Owner Dashboard<br />Access
                 </h2>
@@ -653,14 +901,18 @@ export function GatedDashboard({
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button
+                  <a
                     id="btn-view-nfc-screen"
-                    onClick={() => onOpenCustomerRateView(effectiveBusinessId)}
+                    href={publicRatingUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded text-xs font-black uppercase tracking-wider bg-emerald-500 text-black hover:bg-emerald-400 transition cursor-pointer"
+                    title="Open live unlinked NFC page in a new tab"
                   >
                     <Smartphone className="w-4 h-4" />
-                    <span>Test Customer View</span>
-                  </button>
+                    <span>Open Live NFC Page</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-black/80" />
+                  </a>
                 </div>
               </div>
             </div>
@@ -679,7 +931,7 @@ export function GatedDashboard({
                 </div>
                 <div className="text-5xl font-black mb-1 text-white tracking-tight">{totalPositiveTaps}</div>
                 <p className="text-[11px] text-emerald-400 font-mono uppercase tracking-wider">
-                  Thumbs Up • Sent to Google
+                  Loved It • Sent to Google
                 </p>
               </div>
 
@@ -687,7 +939,7 @@ export function GatedDashboard({
               <div id="card-negative-taps" className="bg-[#161616] p-6 border-l-4 border-rose-500 border border-white/5 rounded-xl shadow-lg">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs uppercase font-bold opacity-75 tracking-wider text-stone-300">
-                    Negative Taps
+                    Needs Attention
                   </span>
                   <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center">
                     <ThumbsDown className="w-4 h-4 text-rose-400" />
@@ -695,7 +947,7 @@ export function GatedDashboard({
                 </div>
                 <div className="text-5xl font-black mb-1 text-white tracking-tight">{totalNegativeTaps}</div>
                 <p className="text-[11px] text-rose-400 font-mono uppercase tracking-wider">
-                  Thumbs Down • Shielded Privately
+                  Could Be Better • Shielded Privately
                 </p>
               </div>
 
@@ -735,7 +987,7 @@ export function GatedDashboard({
             </div>
 
             {/* Weekly Review Analytics Bar Chart */}
-            <WeeklyAnalyticsChart feedbacks={feedbacks} />
+            <WeeklyAnalyticsChart feedbacks={effectiveFeedbacks} isExample={Boolean(isDemoAccount && effectiveFeedbacks.length === 0)} />
 
             {/* Configuration Row: Google Maps URL + NFC Tag Deploy */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -881,12 +1133,15 @@ export function GatedDashboard({
                     <QrCode className="w-4 h-4 text-emerald-400" />
                     <span>Backup QR Ready</span>
                   </div>
-                  <button
-                    onClick={() => onOpenCustomerRateView(effectiveBusinessId)}
-                    className="text-xs text-emerald-400 font-black uppercase tracking-wider hover:underline cursor-pointer"
+                  <a
+                    href={publicRatingUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-emerald-400 font-black uppercase tracking-wider hover:underline inline-flex items-center gap-1 cursor-pointer"
                   >
-                    Open Live Rating View →
-                  </button>
+                    <span>Open Live Rating View ↗</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
                 </div>
               </div>
             </div>
@@ -909,7 +1164,7 @@ export function GatedDashboard({
                     </span>
                   </div>
                   <p className="text-xs text-stone-400 font-medium mt-1">
-                    Customer complaints and private notes submitted when tapping Thumbs Down. Kept strictly private to your dashboard.
+                    Customer feedback and private notes submitted when guests select "Could Be Better". Kept strictly private to your dashboard.
                   </p>
                 </div>
 
@@ -970,7 +1225,7 @@ export function GatedDashboard({
                   {filteredNegativeFeedbacks.map((fb) => (
                     <div
                       key={fb.id}
-                      className={`p-5 transition flex flex-col md:grid md:grid-cols-12 md:items-center gap-4 hover:bg-white/[0.02] ${
+                      className={`p-5 transition flex flex-col gap-3 hover:bg-white/[0.02] ${
                         fb.status === "new"
                           ? "border-l-4 border-rose-500 bg-rose-500/[0.03]"
                           : fb.status === "resolved"
@@ -978,71 +1233,268 @@ export function GatedDashboard({
                           : ""
                       }`}
                     >
-                      {/* Timestamp */}
-                      <div className="md:col-span-2 text-xs font-mono text-stone-400">
-                        {new Date(fb.createdAt).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </div>
+                      <div className="flex flex-col md:grid md:grid-cols-12 md:items-start gap-4">
+                        {/* Timestamp */}
+                        <div className="md:col-span-2 text-xs font-mono text-stone-400">
+                          {new Date(fb.createdAt).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </div>
 
-                      {/* Customer Note & Contact */}
-                      <div className="md:col-span-7 space-y-1.5">
-                        <p className="text-sm text-stone-100 font-bold leading-relaxed">
-                          "{fb.message || fb.customerNote || "Thumbs Down rating (no comment provided)."}"
-                        </p>
+                        {/* Customer Note & Contact */}
+                        <div className="md:col-span-7 space-y-2">
+                          <p className="text-sm text-stone-100 font-bold leading-relaxed">
+                            "{fb.message || fb.customerNote || "Could Be Better rating (no comment provided)."}"
+                          </p>
 
-                        {(fb.customerName || fb.customerContact) && (
                           <div className="text-xs text-stone-400 flex flex-wrap items-center gap-2 font-mono pt-1">
                             {fb.customerName && (
                               <span className="text-emerald-400 font-bold">
                                 Customer: {fb.customerName}
                               </span>
                             )}
-                            {fb.customerContact && (
-                              <span className="bg-[#0A0A0A] border border-white/10 px-2 py-0.5 rounded text-stone-300">
-                                📞 {fb.customerContact}
+                            {fb.customerContact ? (
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="bg-[#0A0A0A] border border-white/15 px-2.5 py-1 rounded text-stone-200 font-bold flex items-center gap-1.5 shadow-sm">
+                                  {fb.customerContact.includes("@") ? (
+                                    <Mail className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                  ) : (
+                                    <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                  )}
+                                  <span>{fb.customerContact}</span>
+                                </span>
+                                {fb.replies && fb.replies.length > 0 ? (
+                                  <span className="bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
+                                    <CheckCheck className="w-3 h-3" />
+                                    Replied ({fb.replies.length})
+                                  </span>
+                                ) : (
+                                  <span className="bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider">
+                                    Reply Needed
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-stone-300 text-[11px] italic">
+                                No contact provided (anonymous)
                               </span>
                             )}
                           </div>
-                        )}
-                      </div>
 
-                      {/* Status & Actions */}
-                      <div className="md:col-span-3 flex items-center justify-between md:justify-end gap-2 pt-2 md:pt-0">
-                        <span
-                          className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded ${
-                            fb.status === "new"
-                              ? "bg-rose-500/20 text-rose-300 border border-rose-500/40"
-                              : fb.status === "reviewed"
-                              ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                              : "bg-white text-black"
-                          }`}
-                        >
-                          {fb.status}
-                        </span>
-
-                        <div className="flex items-center gap-1.5">
-                          {fb.status !== "reviewed" && (
-                            <button
-                              onClick={() => handleStatusUpdate(fb.id, "reviewed")}
-                              className="text-[10px] font-black uppercase tracking-wider bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded border border-white/10 transition cursor-pointer"
-                            >
-                              Review
-                            </button>
-                          )}
-                          {fb.status !== "resolved" && (
-                            <button
-                              onClick={() => handleStatusUpdate(fb.id, "resolved")}
-                              className="text-[10px] font-black uppercase tracking-wider bg-emerald-500 hover:bg-emerald-400 text-black px-3 py-1 rounded transition cursor-pointer"
-                            >
-                              Resolve
-                            </button>
+                          {/* Past System Replies Thread */}
+                          {fb.replies && fb.replies.length > 0 && (
+                            <div className="mt-2.5 space-y-2 pl-3 border-l-2 border-emerald-500/50 bg-[#0A0A0A]/70 p-3 rounded-r-lg">
+                              <div className="text-[10px] uppercase font-black tracking-wider text-emerald-400 flex items-center gap-1.5">
+                                <CornerDownRight className="w-3.5 h-3.5" />
+                                <span>System Replies ({fb.replies.length})</span>
+                              </div>
+                              {fb.replies.map((reply) => (
+                                <div key={reply.id} className="text-xs space-y-1">
+                                  <div className="text-[11px] text-stone-400 flex items-center justify-between">
+                                    <span className="text-stone-300 font-bold">
+                                      {reply.sentBy || "Management"}
+                                      {reply.method === "email" && " (sent via Email)"}
+                                      {reply.method === "sms" && " (sent via SMS)"}
+                                    </span>
+                                    <span className="font-mono text-[10px] text-stone-300">
+                                      {new Date(reply.sentAt).toLocaleDateString(undefined, {
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })}
+                                    </span>
+                                  </div>
+                                  <p className="text-stone-200 text-xs bg-black/40 p-2.5 rounded border border-white/5 whitespace-pre-wrap leading-relaxed">
+                                    "{reply.message}"
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
+
+                        {/* Status & Actions */}
+                        <div className="md:col-span-3 flex flex-wrap items-center justify-between md:justify-end gap-2 pt-2 md:pt-0">
+                          <span
+                            className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded ${
+                              fb.status === "new"
+                                ? "bg-rose-500/20 text-rose-300 border border-rose-500/40"
+                                : fb.status === "reviewed"
+                                ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                                : "bg-white text-black"
+                            }`}
+                          >
+                            {fb.status}
+                          </span>
+
+                          <div className="flex items-center gap-1.5">
+                            {/* Reply Button */}
+                            <button
+                              onClick={() =>
+                                activeReplyFeedbackId === fb.id
+                                  ? handleCloseReply()
+                                  : handleOpenReply(fb)
+                              }
+                              className={`text-[10px] font-black uppercase tracking-wider px-3 py-1 rounded border transition cursor-pointer flex items-center gap-1.5 shadow-sm ${
+                                activeReplyFeedbackId === fb.id
+                                  ? "bg-white text-black border-white"
+                                  : "bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/40"
+                              }`}
+                              title="Reply to customer directly through the system"
+                            >
+                              <MessageSquare className="w-3 h-3" />
+                              <span>{activeReplyFeedbackId === fb.id ? "Close" : fb.replies?.length ? "Reply Again" : "Reply"}</span>
+                            </button>
+
+                            {fb.status !== "reviewed" && (
+                              <button
+                                onClick={() => handleStatusUpdate(fb.id, "reviewed")}
+                                className="text-[10px] font-black uppercase tracking-wider bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded border border-white/10 transition cursor-pointer"
+                              >
+                                Review
+                              </button>
+                            )}
+                            {fb.status !== "resolved" && (
+                              <button
+                                onClick={() => handleStatusUpdate(fb.id, "resolved")}
+                                className="text-[10px] font-black uppercase tracking-wider bg-emerald-500 hover:bg-emerald-400 text-black px-3 py-1 rounded transition cursor-pointer font-bold"
+                              >
+                                Resolve
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       </div>
+
+                      {/* Expandable Reply Form */}
+                      {activeReplyFeedbackId === fb.id && (
+                        <div className="mt-3 pt-3 border-t border-white/10 space-y-3 bg-[#0d0d0d] p-4 rounded-xl border border-white/10">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-black uppercase tracking-wider text-white">
+                                Reply in System
+                              </span>
+                              {fb.customerContact && (
+                                <span className="text-xs font-mono bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 px-2.5 py-0.5 rounded font-bold">
+                                  {fb.customerContact.includes("@") ? "To: " : "Phone: "}
+                                  {fb.customerContact}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Quick fill templates */}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-[10px] uppercase font-black tracking-wider text-stone-300 mr-1">
+                                Quick Fill:
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleSetTemplate(
+                                    fb.id,
+                                    `Dear Customer,\n\nWe sincerely apologize that your visit didn't meet our standards today. We take your feedback to heart and would love the opportunity to make this right on your next visit. Please reply directly to this message so we can coordinate!`
+                                  )
+                                }
+                                className="text-[10px] bg-white/5 hover:bg-white/10 text-stone-300 px-2 py-1 rounded border border-white/10 transition cursor-pointer"
+                              >
+                                Apology & Invite Back
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleSetTemplate(
+                                    fb.id,
+                                    `Thank you for bringing this to our attention. We have addressed this directly with our team so it doesn't happen again. We truly appreciate your honest feedback.`
+                                  )
+                                }
+                                className="text-[10px] bg-white/5 hover:bg-white/10 text-stone-300 px-2 py-1 rounded border border-white/10 transition cursor-pointer"
+                              >
+                                Staff Corrected
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleSetTemplate(
+                                    fb.id,
+                                    `Hi there,\n\nThank you for letting us know about this issue. Could you share a few more details (approximate time of visit, order details) so our manager can investigate and make this right for you?`
+                                  )
+                                }
+                                className="text-[10px] bg-white/5 hover:bg-white/10 text-stone-300 px-2 py-1 rounded border border-white/10 transition cursor-pointer"
+                              >
+                                Ask for Details
+                              </button>
+                            </div>
+                          </div>
+
+                          <textarea
+                            rows={3}
+                            value={replyDrafts[fb.id] || ""}
+                            onChange={(e) =>
+                              setReplyDrafts((prev) => ({
+                                ...prev,
+                                [fb.id]: e.target.value,
+                              }))
+                            }
+                            placeholder={
+                              fb.customerContact
+                                ? fb.customerContact.includes("@")
+                                  ? "Type your response to the customer (will be sent as an official email)..."
+                                  : "Type your response to record in the system for this customer..."
+                                : "Record your response or internal corrective action for this feedback..."
+                            }
+                            className="w-full text-xs font-sans p-3 rounded-lg border border-white/20 bg-[#0A0A0A] text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition resize-none placeholder:text-stone-500"
+                          />
+
+                          {replyNotice?.id === fb.id && (
+                            <div className="text-xs bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 p-2.5 rounded-lg flex items-center gap-2">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <span>{replyNotice.message}</span>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                            <div className="text-[11px] text-stone-400">
+                              {fb.customerContact?.includes("@")
+                                ? "✉️ Sends official email directly to customer & records in system"
+                                : fb.customerContact
+                                ? "📱 Records reply in system and marks status reviewed"
+                                : "ℹ️ Anonymous feedback: reply logged in system audit"}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={handleCloseReply}
+                                className="text-[11px] font-black uppercase tracking-wider bg-transparent hover:bg-white/5 text-stone-400 hover:text-white px-3 py-1.5 rounded border border-white/10 transition cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isSubmittingReply || !(replyDrafts[fb.id]?.trim())}
+                                onClick={() => handleSendReply(fb)}
+                                className="text-[11px] font-black uppercase tracking-wider bg-emerald-500 hover:bg-emerald-400 text-black px-4 py-1.5 rounded transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50 font-bold shadow-md"
+                              >
+                                {isSubmittingReply ? (
+                                  <>
+                                    <div className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                                    <span>Sending...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Send className="w-3.5 h-3.5" />
+                                    <span>{fb.customerContact?.includes("@") ? "Send Email Reply" : "Submit Reply"}</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1058,6 +1510,7 @@ export function GatedDashboard({
           clientSecret={embeddedSession.clientSecret}
           sessionId={embeddedSession.sessionId}
           publishableKey={embeddedSession.publishableKey}
+          checkoutUrl={embeddedSession.checkoutUrl}
           businessName={businessName || business?.businessName}
           onClose={() => setEmbeddedSession(null)}
           onComplete={async () => {
@@ -1072,6 +1525,232 @@ export function GatedDashboard({
           }}
         />
       )}
+
+      {/* Account Settings & Billing Modal */}
+      <AnimatePresence>
+        {isAccountSettingsOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-[#181818] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl space-y-6"
+            >
+              <div className="p-6 border-b border-white/10 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-lg bg-white/5 border border-white/10">
+                    <Settings className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black uppercase tracking-tight text-white">
+                      Account Settings & Billing
+                    </h3>
+                    <p className="text-xs text-stone-400">Manage your subscription, card details, and business profile</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAccountSettingsOpen(false)}
+                  className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="px-6 space-y-5 max-h-[70vh] overflow-y-auto">
+                {/* Subscription Status Card */}
+                <div className="p-4 rounded-xl bg-[#202020] border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-emerald-400" />
+                      <span className="text-xs font-black uppercase tracking-wider text-stone-200">
+                        Subscription Status
+                      </span>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[11px] font-black uppercase tracking-wider font-mono ${
+                        business?.subscriptionStatus === "active"
+                          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                          : business?.subscriptionStatus === "past_due"
+                          ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                          : "bg-stone-700/30 text-stone-400 border border-stone-600/30"
+                      }`}
+                    >
+                      {business?.subscriptionStatus || "Inactive"}
+                    </span>
+                  </div>
+
+                  {business?.subscriptionStatus === "past_due" ? (
+                    <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
+                      <div className="font-bold flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-rose-400" />
+                        <span>Payment Past Due</span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed text-rose-300/90">
+                        The recent card charge failed. Public NFC reviews and QR scans are temporarily paused until you update your billing card.
+                      </p>
+                    </div>
+                  ) : business?.subscriptionStatus === "active" ? (
+                    <p className="text-xs text-stone-400 leading-relaxed">
+                      Your subscription is active. Unlimited NFC reviews, real-time Google Maps redirection, and private feedback collection are fully enabled.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-stone-400 leading-relaxed">
+                      No active subscription detected. Public NFC ratings are currently locked.
+                    </p>
+                  )}
+
+                  {portalError && (
+                    <div className="p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs space-y-2">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                        <span>Billing Portal Notice</span>
+                      </div>
+                      <p className="leading-relaxed">{portalError}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAccountSettingsOpen(false);
+                          handleStartStripeCheckout("month");
+                        }}
+                        className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-[11px] transition cursor-pointer"
+                      >
+                        <CreditCard className="w-3.5 h-3.5" />
+                        <span>Start Stripe Subscription Checkout</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {portalUrl && (
+                    <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs space-y-2 text-center">
+                      <div className="flex items-center justify-center gap-1.5 font-bold text-white">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <span>Stripe Customer Portal Link Ready</span>
+                      </div>
+                      <p className="text-[11px] text-stone-300 leading-tight">
+                        Stripe billing portals open in a separate browser tab to keep card details secure. Click below if not opened automatically:
+                      </p>
+                      <a
+                        href={portalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-2 w-full py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs rounded-lg transition shadow-lg cursor-pointer"
+                      >
+                        <span>Launch Stripe Customer Portal ↗</span>
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    </div>
+                  )}
+
+                  <div className="pt-2 flex flex-col sm:flex-row gap-2">
+                    <button
+                      type="button"
+                      id="btn-open-stripe-customer-portal"
+                      onClick={handleOpenCustomerPortalOrSettings}
+                      disabled={isOpeningPortal}
+                      className="flex-1 py-3 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 shadow-md active:scale-98"
+                    >
+                      {isOpeningPortal ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Connecting to Stripe...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>{portalUrl ? "Re-generate Portal Link" : "Open Stripe Customer Portal"}</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </>
+                      )}
+                    </button>
+                    {!isSubscribed && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAccountSettingsOpen(false);
+                          handleStartStripeCheckout("month");
+                        }}
+                        className="py-3 px-4 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs uppercase tracking-wider transition cursor-pointer"
+                      >
+                        Re-Subscribe
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-stone-500 font-mono text-center">
+                    Secure Stripe billing portal lets you update credit card, view payment history, and manage renewals. Opens in a secure new tab.
+                  </p>
+                </div>
+
+                {/* Business Profile Details */}
+                <form onSubmit={handleSaveSettings} className="p-4 rounded-xl bg-[#202020] border border-white/10 space-y-3">
+                  <div className="flex items-center gap-2 pb-1 border-b border-white/5">
+                    <Store className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-black uppercase tracking-wider text-stone-200">
+                      Business Details
+                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-stone-300">
+                      Business Name
+                    </label>
+                    <input
+                      type="text"
+                      value={businessName}
+                      onChange={(e) => setBusinessName(e.target.value)}
+                      placeholder="Your Business Name"
+                      className="w-full px-3 py-2 bg-[#141414] border border-white/10 focus:border-emerald-500 rounded-lg text-xs font-semibold text-white outline-none transition"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-stone-300">
+                      Google Maps Review URL
+                    </label>
+                    <input
+                      type="url"
+                      value={googleMapsUrl}
+                      onChange={(e) => setGoogleMapsUrl(e.target.value)}
+                      placeholder="https://g.page/r/.../review"
+                      className="w-full px-3 py-2 bg-[#141414] border border-white/10 focus:border-emerald-500 rounded-lg text-xs font-semibold text-white outline-none transition"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={isSavingSettings}
+                      className="px-4 py-2 rounded-lg bg-white text-black hover:bg-stone-200 font-black uppercase text-xs tracking-wider transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {isSavingSettings ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Saving...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-3.5 h-3.5" />
+                          <span>Save Settings</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <div className="p-4 bg-[#141414] border-t border-white/10 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsAccountSettingsOpen(false)}
+                  className="px-4 py-2 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+                >
+                  Done
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

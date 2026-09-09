@@ -4,11 +4,20 @@ export interface Business {
   businessName: string;
   googleMapsReviewUrl: string;
   googleReviewUrl?: string;
-  subscriptionStatus: 'active' | 'inactive' | 'trialing' | 'canceled';
+  subscriptionStatus: 'active' | 'inactive' | 'trialing' | 'canceled' | 'past_due';
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FeedbackReply {
+  id: string;
+  message: string;
+  sentAt: string;
+  sentBy?: string;
+  method: 'email' | 'sms' | 'system';
+  recipientContact?: string;
 }
 
 export interface FeedbackItem {
@@ -22,6 +31,8 @@ export interface FeedbackItem {
   customerName?: string;
   status?: 'new' | 'reviewed' | 'resolved';
   internalNote?: string;
+  replies?: FeedbackReply[];
+  lastRepliedAt?: string;
   createdAt: string | any;
   updatedAt?: string;
 }

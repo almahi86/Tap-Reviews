@@ -19,6 +19,9 @@ import {
   ThumbsDown,
   Info,
   QrCode,
+  CornerDownRight,
+  Mail,
+  Phone,
 } from "lucide-react";
 import { WeeklyAnalyticsChart } from "./WeeklyAnalyticsChart";
 import type { FeedbackItem } from "../types";
@@ -28,66 +31,107 @@ interface DashboardPreviewSectionProps {
   onExploreDemo?: () => void;
 }
 
-const sampleFeedbacks: FeedbackItem[] = [
+interface FixedSampleFeedback extends FeedbackItem {
+  relativeTime: string;
+}
+
+// Fixed showcase reviews for the example dashboard
+const fixedSampleFeedbacks: FixedSampleFeedback[] = [
   {
-    id: "fb-1",
+    id: "fb-ex-1",
     businessId: "demo-cafe",
     rating: "dislike",
-    customerNote: "The oat cortado took 20 minutes to arrive and was lukewarm. Waitstaff was courteous though.",
+    customerNote: "The oat cortado took 20 minutes to arrive during the morning rush and was lukewarm. Waitstaff was courteous though.",
     customerName: "Sarah M.",
-    customerContact: "sarah***@gmail.com",
+    customerContact: "sarah.miller@example.com",
     status: "new",
-    createdAt: new Date(Date.now() - 1000 * 60 * 22).toISOString(),
+    createdAt: "2026-09-07T11:42:00.000Z",
+    relativeTime: "Today, 11:42 AM",
+    replies: [],
   },
   {
-    id: "fb-2",
+    id: "fb-ex-2",
     businessId: "demo-cafe",
     rating: "dislike",
-    customerNote: "Music was a bit loud near the front counter for remote working, but the cold brew is top notch!",
+    customerNote: "Music was a bit loud near the front counter for remote working, but the cold brew was top notch!",
     customerName: "Alex R.",
-    customerContact: "alex***@me.com",
+    customerContact: "alex.r@example.com",
     status: "reviewed",
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString(),
+    createdAt: "2026-09-06T15:30:00.000Z",
+    relativeTime: "Yesterday, 3:30 PM",
+    replies: [
+      {
+        id: "rep-1",
+        message: "Hi Alex, thank you for letting us know! We adjusted the counter speaker volume so remote workers have a quieter workspace.",
+        sentAt: "2026-09-06T16:15:00.000Z",
+        sentBy: "Store Manager",
+        method: "email",
+        recipientContact: "alex.r@example.com",
+      },
+    ],
   },
   {
-    id: "fb-3",
-    businessId: "demo-cafe",
-    rating: "like",
-    customerNote: "Best pour-over in the neighborhood! Quick service and friendly baristas.",
-    customerName: "David K.",
-    customerContact: "david***@gmail.com",
-    status: "resolved",
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 18).toISOString(),
-  },
-  {
-    id: "fb-4",
+    id: "fb-ex-3",
     businessId: "demo-cafe",
     rating: "dislike",
-    customerNote: "Napkin dispenser on the patio was empty. Minor issue, great avocado toast.",
+    customerNote: "Napkin dispenser on the patio was empty and table 4 had not been wiped yet. Great avocado toast as usual.",
     customerName: "Elena V.",
     customerContact: "+1 (512) 555-0182",
     status: "resolved",
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 36).toISOString(),
+    createdAt: "2026-09-05T13:10:00.000Z",
+    relativeTime: "2 days ago",
+    replies: [
+      {
+        id: "rep-2",
+        message: "Thank you for alerting us, Elena! Patio cleaning checklists have been refreshed for the team. We'd love to treat you to coffee on your next visit.",
+        sentAt: "2026-09-05T14:00:00.000Z",
+        sentBy: "Artisan Brews Management",
+        method: "sms",
+        recipientContact: "+1 (512) 555-0182",
+      },
+    ],
   },
   {
-    id: "fb-5",
+    id: "fb-ex-4",
     businessId: "demo-cafe",
-    rating: "like",
-    customerNote: "Loved the seasonal espresso blend! Staff remembered my regular order.",
-    customerName: "Marcus L.",
-    customerContact: "marcus***@yahoo.com",
-    status: "reviewed",
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 52).toISOString(),
-  },
-  {
-    id: "fb-6",
-    businessId: "demo-cafe",
-    rating: "like",
-    customerNote: "Super convenient NFC tap at checkout. Glad to leave 5 stars!",
-    customerName: "Chloe P.",
-    customerContact: "",
+    rating: "dislike",
+    customerNote: "Waited 12 minutes in the line for a pastry. Quality was great though.",
+    customerName: "David K.",
+    customerContact: "david.k@example.com",
     status: "resolved",
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 75).toISOString(),
+    createdAt: "2026-09-04T09:20:00.000Z",
+    relativeTime: "3 days ago",
+    replies: [
+      {
+        id: "rep-3",
+        message: "Hi David, apologies for the pastry delay! We added an extra warming station during morning rush hours.",
+        sentAt: "2026-09-04T10:15:00.000Z",
+        sentBy: "Store Manager",
+        method: "email",
+        recipientContact: "david.k@example.com",
+      },
+    ],
+  },
+  {
+    id: "fb-ex-5",
+    businessId: "demo-cafe",
+    rating: "dislike",
+    customerNote: "Guest WiFi password on the board had a missing character so I could not connect right away.",
+    customerName: "Marcus L.",
+    customerContact: "marcus.l@example.com",
+    status: "reviewed",
+    createdAt: "2026-09-03T16:45:00.000Z",
+    relativeTime: "4 days ago",
+    replies: [
+      {
+        id: "rep-4",
+        message: "Thanks Marcus, chalkboard updated with the correct guest credentials!",
+        sentAt: "2026-09-03T17:00:00.000Z",
+        sentBy: "Store Manager",
+        method: "email",
+        recipientContact: "marcus.l@example.com",
+      },
+    ],
   },
 ];
 
@@ -99,12 +143,12 @@ export function DashboardPreviewSection({
   const [activeFilter, setActiveFilter] = useState<"all" | "new" | "reviewed" | "resolved">("all");
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText("https://tapshield.app/r/artisan-brews");
+    navigator.clipboard.writeText("https://tapshield.space/r/artisan-brews");
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const filteredFeedbacks = sampleFeedbacks.filter((item) => {
+  const filteredFeedbacks = fixedSampleFeedbacks.filter((item) => {
     if (activeFilter === "all") return true;
     return item.status === activeFilter;
   });
@@ -186,7 +230,7 @@ export function DashboardPreviewSection({
           <div className="flex-1 max-w-md mx-auto hidden sm:block">
             <div className="bg-[#0A0A0A] border border-white/10 rounded-lg px-3 py-1 text-center font-mono text-[11px] text-stone-400 flex items-center justify-center gap-2 truncate">
               <Lock className="w-3 h-3 text-emerald-400 flex-shrink-0" />
-              <span className="text-stone-300">https://tapshield.app/dashboard</span>
+              <span className="text-stone-300">https://tapshield.space/dashboard</span>
               <span className="px-1.5 py-0.2 text-[9px] rounded bg-emerald-500/20 text-emerald-300 uppercase font-bold">
                 Live Subscribed State
               </span>
@@ -239,35 +283,35 @@ export function DashboardPreviewSection({
             </div>
           </div>
 
-          {/* 4 Core Stat Cards (Exactly as in GatedDashboard.tsx) */}
+          {/* 4 Core Stat Cards (Showcasing fixed demo metrics) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
             <div className="bg-[#161616] p-6 border-l-4 border-emerald-500 border border-white/5 rounded-r-xl">
               <div className="text-4xl sm:text-5xl font-black mb-1 text-white tracking-tight">
-                {sampleFeedbacks.length}
+                6
               </div>
               <div className="text-xs uppercase font-bold opacity-60 tracking-wider text-stone-300">
-                Private Feedback Received
+                Private Feedback Intercepted
               </div>
               <p className="text-[10px] text-emerald-400 mt-2 font-mono uppercase tracking-wider">
-                Logged in private inbox
+                Shielded from public Google profile
               </p>
             </div>
 
             <div className="bg-[#161616] p-6 border-l-4 border-white border border-white/5 rounded-r-xl">
               <div className="text-4xl sm:text-5xl font-black mb-1 text-white tracking-tight">
-                {sampleFeedbacks.filter((f) => f.status === "new").length}
+                1
               </div>
               <div className="text-xs uppercase font-bold opacity-60 tracking-wider text-stone-300">
                 Pending Action Items
               </div>
-              <p className="text-[10px] text-stone-400 mt-2 font-mono uppercase tracking-wider">
+              <p className="text-[10px] text-amber-400 mt-2 font-mono uppercase tracking-wider">
                 Awaiting manager follow-up
               </p>
             </div>
 
             <div className="bg-[#161616] p-6 border-l-4 border-emerald-500 border border-white/5 rounded-r-xl">
               <div className="text-4xl sm:text-5xl font-black mb-1 text-white tracking-tight">
-                94%
+                90%
               </div>
               <div className="text-xs uppercase font-bold opacity-60 tracking-wider text-stone-300">
                 Direct Google Reviews
@@ -290,9 +334,9 @@ export function DashboardPreviewSection({
             </div>
           </div>
 
-          {/* Weekly Review Analytics Bar Chart (The actual real chart component!) */}
+          {/* Weekly Review Analytics Bar Chart (Fixed showcase demo data) */}
           <div className="rounded-xl border border-white/10 overflow-hidden bg-[#161616] p-5 shadow-lg">
-            <WeeklyAnalyticsChart feedbacks={sampleFeedbacks} />
+            <WeeklyAnalyticsChart isExample={true} feedbacks={fixedSampleFeedbacks} />
           </div>
 
           {/* Configuration Row: Google Maps URL + NFC Tag Programming */}
@@ -386,7 +430,7 @@ export function DashboardPreviewSection({
                 <div className="p-6 space-y-4">
                   <div className="bg-[#0A0A0A] p-3.5 rounded border border-white/10 flex items-center justify-between gap-2">
                     <span className="font-mono text-xs text-emerald-400 truncate select-all">
-                      https://tapshield.app/r/artisan-brews
+                      https://tapshield.space/r/artisan-brews
                     </span>
                     <button
                       type="button"
@@ -455,26 +499,25 @@ export function DashboardPreviewSection({
 
             <div className="divide-y divide-white/5">
               {filteredFeedbacks.map((item) => (
-                <div key={item.id} className="p-5 hover:bg-white/[0.02] transition">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`inline-flex items-center gap-1 text-[11px] font-bold uppercase px-2 py-0.5 rounded ${
-                          item.rating === "like"
-                            ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                            : "bg-rose-500/20 text-rose-400 border border-rose-500/30"
-                        }`}
-                      >
-                        {item.rating === "like" ? (
-                          <ThumbsUp className="w-3 h-3" />
-                        ) : (
-                          <ThumbsDown className="w-3 h-3" />
-                        )}
-                        <span>{item.rating === "like" ? "Liked" : "Disliked"}</span>
+                <div key={item.id} className="p-5 hover:bg-white/[0.02] transition space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase px-2 py-0.5 rounded bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                        <ThumbsDown className="w-3 h-3" />
+                        <span>Private Interception</span>
                       </span>
 
                       <span className="text-white font-bold text-sm">{item.customerName}</span>
-                      <span className="text-stone-500 text-xs font-mono">• {item.customerContact || "Anonymous"}</span>
+                      {item.customerContact && (
+                        <span className="text-stone-400 text-xs font-mono inline-flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded">
+                          {item.customerContact.includes("@") ? (
+                            <Mail className="w-3 h-3 text-sky-400" />
+                          ) : (
+                            <Phone className="w-3 h-3 text-emerald-400" />
+                          )}
+                          <span>{item.customerContact}</span>
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -489,16 +532,41 @@ export function DashboardPreviewSection({
                       >
                         {item.status}
                       </span>
-                      <span className="text-stone-500 text-[11px] font-mono flex items-center gap-1">
+                      <span className="text-stone-400 text-[11px] font-mono flex items-center gap-1">
                         <Clock className="w-3 h-3" />
-                        <span>Recent</span>
+                        <span>{item.relativeTime}</span>
                       </span>
                     </div>
                   </div>
 
-                  <p className="text-stone-300 text-xs sm:text-sm leading-relaxed mt-1">
+                  <p className="text-stone-200 text-xs sm:text-sm leading-relaxed bg-[#111111] p-3 rounded-lg border border-white/5">
                     "{item.customerNote}"
                   </p>
+
+                  {/* Business Replies Thread (Showcasing Reply in System feature) */}
+                  {item.replies && item.replies.length > 0 && (
+                    <div className="pl-4 sm:pl-6 border-l-2 border-emerald-500/40 space-y-2 mt-2">
+                      {item.replies.map((rep) => (
+                        <div key={rep.id} className="bg-emerald-950/20 border border-emerald-500/20 rounded-lg p-3 text-xs space-y-1">
+                          <div className="flex items-center justify-between text-[11px] font-mono">
+                            <span className="text-emerald-400 font-bold inline-flex items-center gap-1.5">
+                              <CornerDownRight className="w-3.5 h-3.5" />
+                              <span>{rep.sentBy || "Store Manager"}</span>
+                              <span className="text-[10px] uppercase font-bold bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded">
+                                via {rep.method === "email" ? "Email" : rep.method === "sms" ? "SMS" : "System"}
+                              </span>
+                            </span>
+                            <span className="text-stone-400 text-[10px]">
+                              Direct Resolution Sent
+                            </span>
+                          </div>
+                          <p className="text-stone-300 leading-relaxed text-xs pl-5">
+                            "{rep.message}"
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

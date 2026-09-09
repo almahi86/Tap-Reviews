@@ -7,19 +7,21 @@ interface SubscriptionModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser: AuthUserProfile | null;
+  isSubscribed?: boolean;
   initialPlan?: "month" | "year";
   initialBusinessName?: string;
   onConfirmSubscription: (params: {
     businessName: string;
     interval: "month" | "year";
   }) => Promise<void>;
-  onAuthSuccess: (user: AuthUserProfile, previewCode?: string, businessName?: string) => void;
+  onAuthSuccess: (user: AuthUserProfile, businessName?: string) => void;
 }
 
 export function SubscriptionModal({
   isOpen,
   onClose,
   currentUser,
+  isSubscribed = false,
   initialPlan = "year",
   initialBusinessName = "",
   onConfirmSubscription,
@@ -34,10 +36,12 @@ export function SubscriptionModal({
   const [authMode, setAuthMode] = useState<"signup" | "signin">("signup");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [ownerName, setOwnerName] = useState("");
   const [staySignedIn, setStaySignedIn] = useState(true);
 
-  if (!isOpen) return null;
+  // If user already has an active subscription, never show subscription modal
+  if (!isOpen || isSubscribed) return null;
 
   const handleProceed = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -62,16 +66,23 @@ export function SubscriptionModal({
         }
 
         if (authMode === "signup") {
-          const { user, previewCode } = await signUpWithEmail(
+          if (!confirmPassword) {
+            throw new Error("Please confirm your password.");
+          }
+          if (password !== confirmPassword) {
+            throw new Error("Passwords do not match. Please ensure both passwords are identical.");
+          }
+
+          const { user } = await signUpWithEmail(
             email,
             password,
             ownerName || trimmedName,
             staySignedIn
           );
-          onAuthSuccess(user, previewCode, trimmedName);
+          onAuthSuccess(user, trimmedName);
         } else {
           const user = await signInWithEmail(email, password, staySignedIn);
-          onAuthSuccess(user, undefined, trimmedName);
+          onAuthSuccess(user, trimmedName);
         }
       }
 
@@ -103,7 +114,7 @@ export function SubscriptionModal({
 
     try {
       const user = await signInWithGoogle(staySignedIn, currentUser?.email || "ossovi32@gmail.com");
-      onAuthSuccess(user, undefined, trimmedName);
+      onAuthSuccess(user, trimmedName);
       await onConfirmSubscription({
         businessName: trimmedName,
         interval,
@@ -282,7 +293,11 @@ export function SubscriptionModal({
               <div className="flex gap-2 text-[11px] font-mono">
                 <button
                   type="button"
-                  onClick={() => setAuthMode("signup")}
+                  onClick={() => {
+                    setAuthMode("signup");
+                    setError(null);
+                    setConfirmPassword("");
+                  }}
                   className={`underline cursor-pointer ${authMode === "signup" ? "text-emerald-400 font-bold" : "text-stone-400"}`}
                 >
                   Create Account
@@ -290,7 +305,11 @@ export function SubscriptionModal({
                 <span className="text-stone-600">•</span>
                 <button
                   type="button"
-                  onClick={() => setAuthMode("signin")}
+                  onClick={() => {
+                    setAuthMode("signin");
+                    setError(null);
+                    setConfirmPassword("");
+                  }}
                   className={`underline cursor-pointer ${authMode === "signin" ? "text-emerald-400 font-bold" : "text-stone-400"}`}
                 >
                   Sign In
@@ -363,6 +382,18 @@ export function SubscriptionModal({
                   className="w-full px-3 py-2 bg-[#121212] border border-white/20 rounded-lg text-xs font-mono text-white outline-none focus:border-emerald-500"
                 />
               </div>
+              {authMode === "signup" && (
+                <div>
+                  <input
+                    id="input-subscription-confirm-password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm Password"
+                    className="w-full px-3 py-2 bg-[#121212] border border-white/20 rounded-lg text-xs font-mono text-white outline-none focus:border-emerald-500"
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}

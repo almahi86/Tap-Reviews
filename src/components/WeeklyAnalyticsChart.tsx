@@ -22,7 +22,8 @@ import {
 import type { FeedbackItem } from "../types";
 
 interface WeeklyAnalyticsChartProps {
-  feedbacks: FeedbackItem[];
+  feedbacks?: FeedbackItem[];
+  isExample?: boolean;
 }
 
 interface DayData {
@@ -34,12 +35,59 @@ interface DayData {
   redirected: number;
 }
 
-export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
+// Fixed showcase analytics for the example dashboard
+const FIXED_CURRENT_WEEK: { day: string; good: number; bad: number }[] = [
+  { day: "Mon", good: 5, bad: 1 },
+  { day: "Tue", good: 6, bad: 1 },
+  { day: "Wed", good: 6, bad: 0 },
+  { day: "Thu", good: 7, bad: 1 },
+  { day: "Fri", good: 10, bad: 1 },
+  { day: "Sat", good: 13, bad: 1 },
+  { day: "Sun", good: 8, bad: 1 },
+];
+
+const FIXED_PREVIOUS_WEEK: { day: string; good: number; bad: number }[] = [
+  { day: "Mon", good: 5, bad: 0 },
+  { day: "Tue", good: 5, bad: 1 },
+  { day: "Wed", good: 6, bad: 1 },
+  { day: "Thu", good: 7, bad: 0 },
+  { day: "Fri", good: 9, bad: 1 },
+  { day: "Sat", good: 12, bad: 1 },
+  { day: "Sun", good: 7, bad: 1 },
+];
+
+export function WeeklyAnalyticsChart({
+  feedbacks = [],
+  isExample = false,
+}: WeeklyAnalyticsChartProps) {
   const [timeRange, setTimeRange] = useState<"current" | "previous">("current");
   const [chartType, setChartType] = useState<"grouped" | "stacked">("grouped");
 
   // Compute daily metrics for the past 7 days (or previous week)
   const weeklyData = useMemo(() => {
+    // If this is an example dashboard, return fixed realistic showcase reviews data
+    if (isExample) {
+      const fixedTemplate = timeRange === "current" ? FIXED_CURRENT_WEEK : FIXED_PREVIOUS_WEEK;
+      const now = new Date();
+      const offset = timeRange === "previous" ? 7 : 0;
+
+      return fixedTemplate.map((item, idx) => {
+        const d = new Date(now);
+        d.setDate(now.getDate() - (6 - idx + offset));
+        const dateStr = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        const total = item.good + item.bad;
+
+        return {
+          day: item.day,
+          date: dateStr,
+          total,
+          good: item.good,
+          bad: item.bad,
+          redirected: item.good,
+        };
+      });
+    }
+
     const days: DayData[] = [];
     const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const now = new Date();
@@ -84,7 +132,7 @@ export function WeeklyAnalyticsChart({ feedbacks }: WeeklyAnalyticsChartProps) {
     }
 
     return days;
-  }, [feedbacks, timeRange]);
+  }, [feedbacks, timeRange, isExample]);
 
   // Aggregate weekly totals
   const totals = useMemo(() => {

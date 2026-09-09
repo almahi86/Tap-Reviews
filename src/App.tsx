@@ -17,8 +17,10 @@ import {
   getStoredAuthSession,
   saveAuthSession,
   clearAuthSession,
+  isProAccountEmail,
+  checkAccountProStatus,
 } from "./lib/auth-service";
-import type { AuthUserProfile } from "./types";
+import type { AuthUserProfile, Business } from "./types";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   Smartphone,
@@ -76,7 +78,6 @@ export default function App() {
 
   // Auth modal control
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [activePreviewCode, setActivePreviewCode] = useState<string | undefined>(undefined);
 
   // Subscription modal control (prompts for business name before checkout)
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
@@ -89,6 +90,7 @@ export default function App() {
     clientSecret: string;
     sessionId: string;
     publishableKey?: string;
+    checkoutUrl?: string;
   } | null>(null);
 
   // Subscription state: tracks if business owner has active access (false by default for new accounts)
@@ -107,35 +109,67 @@ export default function App() {
     }
   }, []);
 
+  // When signed in AND subscribed, transition from landing to dashboard
+  useEffect(() => {
+    if (currentUser && isSubscribed && currentView === "landing") {
+      setCurrentView("dashboard");
+    }
+  }, [currentUser, isSubscribed, currentView]);
+
+  // When an account that has an active subscription is detected, automatically close any subscription modal
+  useEffect(() => {
+    if (isSubscribed && isSubscriptionModalOpen) {
+      setIsSubscriptionModalOpen(false);
+    }
+  }, [isSubscribed, isSubscriptionModalOpen]);
+
   // Sync business subscription status and business name
   useEffect(() => {
     async function loadSubStatus() {
+      // If user is signed out, they do not have an active subscription
+      if (!currentUser) {
+        setIsSubscribed(false);
+        return;
+      }
+
       try {
-        const biz = await fetchBusiness(activeBusinessId, currentUser?.email || undefined);
-        let active = biz?.subscriptionStatus === "active";
+        const isUserPro = isProAccountEmail(currentUser.email);
+        if (isUserPro) {
+          setIsSubscribed(true);
+          setIsSubscriptionModalOpen(false);
+        }
+
+        const biz = await fetchBusiness(activeBusinessId, currentUser.email);
+        if (biz?.id && biz.id !== activeBusinessId) {
+          setActiveBusinessId(biz.id);
+        }
+        if (biz?.businessName) {
+          setCurrentBusinessName(biz.businessName);
+        }
+
+        let active = isUserPro || biz?.subscriptionStatus === "active" || (biz as any)?.isPro === true;
 
         // Also check live Stripe subscription directly if not marked active yet
         if (!active && currentUser) {
           try {
-            const res = await fetch(
-              `/api/subscription-status?email=${encodeURIComponent(currentUser.email || "")}&userId=${encodeURIComponent(currentUser.uid)}&businessId=${encodeURIComponent(activeBusinessId)}`
-            );
-            if (res.ok) {
-              const data = await res.json();
-              if (data.isPro || data.status === "active") {
-                active = true;
-              }
+            const isPro = await checkAccountProStatus(currentUser.uid, currentUser.email);
+            if (isPro) {
+              active = true;
             }
           } catch {}
         }
 
         setIsSubscribed(active);
-        if (biz?.businessName) {
-          setCurrentBusinessName(biz.businessName);
+        if (active) {
+          setIsSubscriptionModalOpen(false);
         }
       } catch (err) {
         console.warn("Could not load initial business profile:", err);
-        setIsSubscribed(activeBusinessId === "demo-cafe");
+        const isPro = isProAccountEmail(currentUser?.email);
+        setIsSubscribed(isPro);
+        if (isPro) {
+          setIsSubscriptionModalOpen(false);
+        }
       }
     }
     loadSubStatus();
@@ -185,13 +219,24 @@ export default function App() {
             user.providerData?.some((p) => p.providerId === "google.com") ||
             user.uid.startsWith("google_");
 
-          let verified = isGoogleUser || Boolean(user.emailVerified);
-          // Check backend verification store if not verified yet
-          if (!verified && user.email) {
-            try {
-              verified = await checkEmailVerificationStatus(user.email, user.uid);
-            } catch {
-              // keep existing
+          let verified = false;
+          if (isGoogleUser) {
+            verified = true;
+          } else if (session && session.emailVerified === false) {
+            // Pending email verification code from recent signup or login
+            verified = false;
+          } else if (session && session.emailVerified === true) {
+            // Already verified for the current active session
+            verified = true;
+          } else {
+            // If user has not verified yet in this session, check if existing record was verified
+            verified = Boolean(user.emailVerified);
+            if (!verified && user.email) {
+              try {
+                verified = await checkEmailVerificationStatus(user.email, user.uid);
+              } catch {
+                // keep existing
+              }
             }
           }
 
@@ -268,11 +313,12 @@ export default function App() {
         user: currentUser,
       });
 
-      if (session?.clientSecret) {
+      if (session?.clientSecret || session?.url || session?.checkoutUrl) {
         setEmbeddedSession({
-          clientSecret: session.clientSecret,
+          clientSecret: session.clientSecret || "",
           sessionId: session.sessionId,
           publishableKey: session.publishableKey,
+          checkoutUrl: session.url || session.checkoutUrl,
         });
       }
     } catch (err: any) {
@@ -290,20 +336,39 @@ export default function App() {
   const handleSignOut = async () => {
     try {
       await signOutUser();
-    } catch {
-      // ignored
+    } catch (err) {
+      console.warn("Sign out error:", err);
     }
     clearAuthSession();
     setCurrentUser(null);
-    setActivePreviewCode(undefined);
+    setIsSubscribed(false);
+    setEmbeddedSession(null);
+    setIsAuthModalOpen(false);
+    setIsSubscriptionModalOpen(false);
     setActiveBusinessId("demo-cafe");
     setCurrentView("landing");
   };
 
+  const handleUserAuthChange = (newUser: AuthUserProfile | null) => {
+    if (!newUser) {
+      handleSignOut();
+    } else {
+      setCurrentUser(newUser);
+      saveAuthSession(newUser, true);
+    }
+  };
+
   // Standalone Customer Rating Page (/rate/[businessId]):
-  // Completely isolated, distraction-free layout with no SaaS navbar, no footer, and no links back to the SaaS platform.
-  if (currentView === "rate") {
-    return <NfcRatingPage businessId={activeBusinessId} />;
+  // When an NFC card or QR code is scanned, or when opening the dedicated live card page in a new tab,
+  // display a completely isolated, distraction-free layout with NO SaaS navbar or dashboard links.
+  const isDirectRateRoute =
+    typeof window !== "undefined" &&
+    (window.location.pathname.startsWith("/rate/") ||
+      new URLSearchParams(window.location.search).has("rate") ||
+      (currentView === "rate" && !currentUser));
+
+  if (isDirectRateRoute) {
+    return <NfcRatingPage businessId={activeBusinessId} isOwnerPreview={false} />;
   }
 
   return (
@@ -313,7 +378,16 @@ export default function App() {
         aria-label="Demo flow navigation"
         className="bg-[#0F0F0F] text-stone-300 px-4 py-2.5 text-xs flex flex-wrap items-center justify-between border-b border-white/10 shadow-sm z-40 gap-2"
       >
-        <div className="flex items-center gap-2.5">
+        <div
+          onClick={() => {
+            if (currentUser) {
+              setCurrentView("dashboard");
+            } else {
+              setCurrentView("landing");
+            }
+          }}
+          className="flex items-center gap-2.5 cursor-pointer"
+        >
           <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center text-black">
             <Shield className="w-3.5 h-3.5 text-black" fill="currentColor" />
           </div>
@@ -325,20 +399,22 @@ export default function App() {
           </span>
         </div>
 
-        {/* View Switcher Tabs */}
+        {/* View Switcher Tabs: when subscribed, only Dashboard and Customer View are shown */}
         <div className="flex items-center gap-1 bg-[#161616] p-1 rounded-lg border border-white/10">
-          <button
-            id="nav-tab-landing"
-            onClick={() => setCurrentView("landing")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-black uppercase tracking-wider transition cursor-pointer ${
-              currentView === "landing"
-                ? "bg-white text-black shadow-xs font-black"
-                : "text-stone-400 hover:text-white"
-            }`}
-          >
-            <Globe className="w-3.5 h-3.5" />
-            <span>Overview</span>
-          </button>
+          {(!currentUser || !isSubscribed) && (
+            <button
+              id="nav-tab-landing"
+              onClick={() => setCurrentView("landing")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-black uppercase tracking-wider transition cursor-pointer ${
+                currentView === "landing"
+                  ? "bg-white text-black shadow-xs font-black"
+                  : "text-stone-400 hover:text-white"
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>Overview</span>
+            </button>
+          )}
 
           <button
             id="nav-tab-dashboard"
@@ -358,14 +434,18 @@ export default function App() {
             id="nav-tab-rate"
             onClick={() => {
               const bizId = currentUser ? currentUser.uid : activeBusinessId;
-              window.open(`/rate/${bizId}`, "_blank");
+              setActiveBusinessId(bizId);
+              setCurrentView("rate");
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-black uppercase tracking-wider transition cursor-pointer text-stone-400 hover:text-white"
-            title="Open isolated customer rating view in new window"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-black uppercase tracking-wider transition cursor-pointer ${
+              currentView === "rate"
+                ? "bg-white text-black shadow-xs font-black"
+                : "text-stone-400 hover:text-white"
+            }`}
+            title="Interactive in-dashboard customer flow preview"
           >
             <Smartphone className="w-3.5 h-3.5" />
-            <span>Customer View</span>
-            <ExternalLink className="w-3 h-3 text-stone-400" />
+            <span>Customer Preview</span>
           </button>
         </div>
 
@@ -431,10 +511,10 @@ export default function App() {
             isSubscribed={isSubscribed}
             onEnterDashboard={() => setCurrentView("dashboard")}
             onOpenCustomerRateView={() => setCurrentView("rate")}
-            onUserAuthChange={setCurrentUser}
+            onUserAuthChange={handleUserAuthChange}
+            onSignOut={handleSignOut}
             onSubscribe={handleSubscribe}
             isCheckingOut={isCheckingOut}
-            onPreviewCodeReceived={(code) => setActivePreviewCode(code)}
           />
         )}
 
@@ -462,7 +542,6 @@ export default function App() {
               onVerified={(verifiedUser) => {
                 setCurrentUser(verifiedUser);
                 saveAuthSession(verifiedUser, true);
-                setActivePreviewCode(undefined);
               }}
               onSignOut={handleSignOut}
             />
@@ -474,7 +553,8 @@ export default function App() {
                 setActiveBusinessId(bizId);
                 setCurrentView("rate");
               }}
-              onUserAuthChange={setCurrentUser}
+              onUserAuthChange={handleUserAuthChange}
+              onSignOut={handleSignOut}
               onBackToLanding={() => setCurrentView("landing")}
               onOpenAuthModal={() => setIsAuthModalOpen(true)}
             />
@@ -495,7 +575,11 @@ export default function App() {
         )}
 
         {currentView === "rate" && (
-          <NfcRatingPage businessId={activeBusinessId} />
+          <NfcRatingPage
+            businessId={currentUser ? currentUser.uid : activeBusinessId}
+            isOwnerPreview={Boolean(currentUser)}
+            onBackToDashboard={() => setCurrentView("dashboard")}
+          />
         )}
       </main>
 
@@ -505,6 +589,7 @@ export default function App() {
           clientSecret={embeddedSession.clientSecret}
           sessionId={embeddedSession.sessionId}
           publishableKey={embeddedSession.publishableKey}
+          checkoutUrl={embeddedSession.checkoutUrl}
           businessName={currentBusinessName}
           onClose={() => setEmbeddedSession(null)}
           onComplete={async () => {
@@ -529,42 +614,53 @@ export default function App() {
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
-        onAuthSuccess={async (user, previewCode, businessName) => {
+        onAuthSuccess={async (user, businessName) => {
           setCurrentUser(user);
           setActiveBusinessId(user.uid);
-          if (previewCode) {
-            setActivePreviewCode(previewCode);
+
+          // Check if this user account has Pro or an active subscription
+          const isUserPro = isProAccountEmail(user.email) || (await checkAccountProStatus(user.uid, user.email));
+
+          // Fetch existing business profile FIRST to identify existing business and subscription status
+          let existingBiz: Business | null = null;
+          try {
+            existingBiz = await fetchBusiness(user.uid, user.email || undefined);
+          } catch {}
+
+          const hasActiveSubscription =
+            isUserPro ||
+            existingBiz?.subscriptionStatus === "active" ||
+            (existingBiz as any)?.isPro === true;
+
+          if (existingBiz?.id) {
+            setActiveBusinessId(existingBiz.id);
           }
-          if (businessName) {
+          if (existingBiz?.businessName) {
+            setCurrentBusinessName(existingBiz.businessName);
+          } else if (businessName) {
             setCurrentBusinessName(businessName);
+          }
+
+          // Only update business profile if businessName is provided and different, never downgrading subscription
+          if (businessName && (!existingBiz || existingBiz.businessName !== businessName)) {
             try {
               await saveBusinessProfile({
-                id: user.uid,
+                id: existingBiz?.id || user.uid,
                 businessName,
-                subscriptionStatus: "inactive",
+                subscriptionStatus: hasActiveSubscription ? "active" : (existingBiz?.subscriptionStatus || "inactive"),
               });
             } catch (err) {
               console.warn("Could not save initial business name:", err);
             }
           }
 
-          // Verify if this account already has an active paid subscription
-          let hasActiveSubscription = false;
-          try {
-            const biz = await fetchBusiness(user.uid);
-            hasActiveSubscription = biz?.subscriptionStatus === "active";
-          } catch {
-            hasActiveSubscription = false;
-          }
-
           setIsSubscribed(hasActiveSubscription);
 
-          // If not paid and verified, trigger the subscription payment modal
-          if (!hasActiveSubscription && user.emailVerified) {
-            setIsSubscriptionModalOpen(true);
-          }
+          // CRITICAL: NEVER show subscription modal when an account logs in.
+          // Especially for active subscribers, this modal must remain closed.
+          setIsSubscriptionModalOpen(false);
 
-          // Navigate to dashboard (which renders the subscription paywall if inactive)
+          // Navigate directly to dashboard
           setCurrentView("dashboard");
         }}
       />
@@ -574,22 +670,47 @@ export default function App() {
         isOpen={isSubscriptionModalOpen}
         onClose={() => setIsSubscriptionModalOpen(false)}
         currentUser={currentUser}
+        isSubscribed={isSubscribed}
         initialPlan={subscriptionPlan}
         initialBusinessName={currentBusinessName}
         onConfirmSubscription={handleConfirmSubscription}
-        onAuthSuccess={async (user, previewCode, businessName) => {
+        onAuthSuccess={async (user, businessName) => {
           setCurrentUser(user);
           setActiveBusinessId(user.uid);
-          if (previewCode) {
-            setActivePreviewCode(previewCode);
+
+          const isUserPro = isProAccountEmail(user.email) || (await checkAccountProStatus(user.uid, user.email));
+          let existingBiz: Business | null = null;
+          try {
+            existingBiz = await fetchBusiness(user.uid, user.email || undefined);
+          } catch {}
+
+          const hasActive =
+            isUserPro ||
+            existingBiz?.subscriptionStatus === "active" ||
+            (existingBiz as any)?.isPro === true;
+
+          if (existingBiz?.id) {
+            setActiveBusinessId(existingBiz.id);
           }
-          if (businessName) {
+          if (existingBiz?.businessName) {
+            setCurrentBusinessName(existingBiz.businessName);
+          } else if (businessName) {
             setCurrentBusinessName(businessName);
+          }
+
+          if (hasActive) {
+            setIsSubscribed(true);
+            setIsSubscriptionModalOpen(false);
+            setCurrentView("dashboard");
+            return;
+          }
+
+          if (businessName) {
             try {
               await saveBusinessProfile({
-                id: user.uid,
+                id: existingBiz?.id || user.uid,
                 businessName,
-                subscriptionStatus: "inactive",
+                subscriptionStatus: existingBiz?.subscriptionStatus || "inactive",
               });
             } catch (err) {
               console.warn("Could not save initial business name on subscription auth:", err);

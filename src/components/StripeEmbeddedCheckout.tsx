@@ -11,6 +11,7 @@ interface StripeEmbeddedCheckoutProps {
   clientSecret: string;
   sessionId?: string;
   publishableKey?: string;
+  checkoutUrl?: string;
   businessName?: string;
   onClose: () => void;
   onComplete?: () => void;
@@ -20,6 +21,7 @@ export function StripeEmbeddedCheckoutModal({
   clientSecret,
   sessionId,
   publishableKey: initialPublishableKey,
+  checkoutUrl,
   businessName,
   onClose,
   onComplete,
@@ -29,6 +31,16 @@ export function StripeEmbeddedCheckoutModal({
   const [keyInput, setKeyInput] = useState<string>("");
   const [isLoadingKey, setIsLoadingKey] = useState<boolean>(!initialPublishableKey);
   const [initError, setInitError] = useState<string | null>(null);
+  const [isSlowLoading, setIsSlowLoading] = useState<boolean>(false);
+  const [embeddedError, setEmbeddedError] = useState<string | null>(null);
+
+  // Detect slow loading in sandboxed iframes and offer direct Stripe checkout
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsSlowLoading(true);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Load publishable key
   useEffect(() => {
@@ -133,6 +145,31 @@ export function StripeEmbeddedCheckoutModal({
 
         {/* Modal Body / Embedded Checkout View */}
         <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
+          {/* Direct Stripe Checkout Link (Always Available When Provided) */}
+          {checkoutUrl && (
+            <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+              <div className="space-y-0.5 text-center sm:text-left">
+                <p className="font-bold text-white flex items-center gap-1.5 justify-center sm:justify-start">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>Direct Stripe Checkout Available</span>
+                </p>
+                <p className="text-[11px] text-stone-300">
+                  Prefer a full screen? Open official Stripe Checkout in a secure new tab.
+                </p>
+              </div>
+              <a
+                id="btn-open-stripe-direct-tab"
+                href={checkoutUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase tracking-wider text-[11px] rounded-lg transition shadow-md whitespace-nowrap cursor-pointer"
+              >
+                <span>Open in New Tab</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          )}
+
           {isLoadingKey ? (
             <div className="py-16 text-center space-y-3">
               <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -225,13 +262,55 @@ export function StripeEmbeddedCheckoutModal({
             </div>
           ) : (
             /* Live Stripe Embedded Checkout Component */
-            <div id="stripe-checkout" className="rounded-xl overflow-hidden min-h-[440px] bg-white text-black p-2">
-              <EmbeddedCheckoutProvider
-                stripe={stripePromise}
-                options={{ clientSecret }}
-              >
-                <EmbeddedCheckout />
-              </EmbeddedCheckoutProvider>
+            <div className="space-y-3">
+              {isSlowLoading && checkoutUrl && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-200 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    <span>Taking longer to load in this preview window?</span>
+                  </div>
+                  <a
+                    href={checkoutUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1 bg-amber-400 hover:bg-amber-300 text-black font-bold text-[10px] uppercase rounded transition flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                  >
+                    <span>Open on Stripe</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
+
+              {embeddedError ? (
+                <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-xl text-center space-y-4">
+                  <p className="text-sm font-bold text-rose-300">
+                    Embedded checkout could not load in this preview sandbox.
+                  </p>
+                  {checkoutUrl && (
+                    <a
+                      href={checkoutUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-5 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs rounded-lg transition shadow-md cursor-pointer"
+                    >
+                      <span>Proceed to Official Stripe Checkout</span>
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div id="stripe-checkout" className="rounded-xl overflow-hidden min-h-[440px] bg-white text-black p-2 relative">
+                  <EmbeddedCheckoutProvider
+                    stripe={stripePromise}
+                    options={{
+                      clientSecret,
+                      onComplete,
+                    }}
+                  >
+                    <EmbeddedCheckout />
+                  </EmbeddedCheckoutProvider>
+                </div>
+              )}
             </div>
           )}
         </div>

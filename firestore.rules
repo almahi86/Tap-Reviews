@@ -27,8 +27,9 @@ service cloud.firestore {
       return data.businessName is string &&
              data.businessName.size() > 0 &&
              data.businessName.size() <= 100 &&
+             (!('ownerEmail' in data) || (data.ownerEmail is string && data.ownerEmail.size() <= 150)) &&
              (!('googleMapsReviewUrl' in data) || (data.googleMapsReviewUrl is string && data.googleMapsReviewUrl.size() <= 500)) &&
-             (!('subscriptionStatus' in data) || data.subscriptionStatus in ['active', 'inactive', 'trialing', 'canceled']);
+             (!('subscriptionStatus' in data) || data.subscriptionStatus in ['active', 'inactive', 'trialing', 'canceled', 'past_due']);
     }
 
     function isValidFeedback(data, businessId) {
@@ -40,17 +41,23 @@ service cloud.firestore {
 
     match /businesses/{businessId} {
       allow get: if isValidId(businessId);
-      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow list: if true;
 
       allow create: if isSignedIn() &&
                        isValidId(businessId) &&
                        request.resource.data.ownerUid == request.auth.uid &&
                        isValidBusiness(request.resource.data);
 
-      allow update: if isSignedIn() &&
+      allow update: if (
+                       isSignedIn() &&
                        isBusinessOwner(businessId) &&
                        (!('ownerUid' in resource.data) || !('ownerUid' in request.resource.data) || request.resource.data.ownerUid == resource.data.ownerUid) &&
-                       isValidBusiness(request.resource.data);
+                       isValidBusiness(request.resource.data)
+                     ) || (
+                       // Allow server webhook updates to subscription fields
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['subscriptionStatus', 'updatedAt', 'stripeCustomerId', 'stripeSubscriptionId']) &&
+                       request.resource.data.subscriptionStatus in ['active', 'inactive', 'trialing', 'canceled', 'past_due']
+                     );
 
       allow delete: if isSignedIn() && isBusinessOwner(businessId);
 

@@ -11,7 +11,7 @@ import type { AuthUserProfile } from "../types";
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAuthSuccess: (user: AuthUserProfile, previewCode?: string, businessName?: string) => void;
+  onAuthSuccess: (user: AuthUserProfile, businessName?: string) => void;
   defaultMode?: "signin" | "signup";
 }
 
@@ -24,6 +24,7 @@ export function AuthModal({
   const [mode, setMode] = useState<"signin" | "signup">(defaultMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [staySignedIn, setStaySignedIn] = useState(true);
@@ -45,6 +46,12 @@ export function AuthModal({
         if (password.length < 6) {
           throw new Error("Password must be at least 6 characters.");
         }
+        if (!confirmPassword) {
+          throw new Error("Please confirm your password.");
+        }
+        if (password !== confirmPassword) {
+          throw new Error("Passwords do not match. Please ensure both passwords are identical.");
+        }
 
         const { user } = await signUpWithEmail(
           email,
@@ -52,7 +59,7 @@ export function AuthModal({
           displayName || businessName,
           staySignedIn
         );
-        onAuthSuccess(user, undefined, businessName.trim() || undefined);
+        onAuthSuccess(user, businessName.trim() || undefined);
         onClose();
       } else {
         if (!email || !password) {
@@ -79,7 +86,7 @@ export function AuthModal({
         email.trim() || "ossovi32@gmail.com",
         displayName.trim() || undefined
       );
-      onAuthSuccess(user, undefined, businessName.trim() || undefined);
+      onAuthSuccess(user, businessName.trim() || undefined);
       onClose();
     } catch (err: any) {
       console.error("Google Auth error:", err);
@@ -131,6 +138,7 @@ export function AuthModal({
               onClick={() => {
                 setMode("signin");
                 setError(null);
+                setConfirmPassword("");
               }}
               className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition cursor-pointer ${
                 mode === "signin" ? "bg-white text-black font-black" : "text-stone-400 hover:text-white"
@@ -143,6 +151,7 @@ export function AuthModal({
               onClick={() => {
                 setMode("signup");
                 setError(null);
+                setConfirmPassword("");
               }}
               className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition cursor-pointer ${
                 mode === "signup" ? "bg-emerald-500 text-black font-black" : "text-stone-400 hover:text-white"
@@ -257,6 +266,25 @@ export function AuthModal({
               />
             </div>
 
+            {mode === "signup" && (
+              <div className="space-y-1">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Confirm Password</span>
+                </label>
+                <input
+                  id="input-auth-confirm-password"
+                  type="password"
+                  required
+                  minLength={6}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-3 py-2 rounded-xl bg-[#0A0A0A] border border-white/15 text-white text-xs placeholder:text-stone-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
+                />
+              </div>
+            )}
+
             {error && (
               <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -295,6 +323,7 @@ export function AuthModal({
                   onClick={() => {
                     setMode("signup");
                     setError(null);
+                    setConfirmPassword("");
                   }}
                   className="text-emerald-400 hover:underline font-bold cursor-pointer"
                 >
@@ -309,6 +338,7 @@ export function AuthModal({
                   onClick={() => {
                     setMode("signin");
                     setError(null);
+                    setConfirmPassword("");
                   }}
                   className="text-emerald-400 hover:underline font-bold cursor-pointer"
                 >

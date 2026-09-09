@@ -252,9 +252,12 @@ export async function fetchBusiness(businessId: string, userEmail?: string): Pro
   return null;
 }
 
-export async function saveBusinessProfile(data: Partial<Business> & { id: string }): Promise<void> {
+export async function saveBusinessProfile(
+  data: Partial<Business> & { id: string },
+  userEmail?: string
+): Promise<void> {
   const currentUser = auth?.currentUser;
-  const email = currentUser?.email || (data as any).ownerEmail;
+  const email = userEmail || currentUser?.email || data.ownerEmail;
   const isSuspended = data.subscriptionStatus === "past_due" || data.subscriptionStatus === "canceled";
 
   // Check if existing profile is already active so we never downgrade
@@ -554,7 +557,18 @@ export function subscribeToFeedbacks(
   // 3. Fetch from Express backend API to synchronize
   const fetchServerFeedbacks = async () => {
     try {
-      const res = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/feedbacks`);
+      const authUserEmail = auth?.currentUser?.email;
+      const stored = typeof window !== "undefined" ? localStorage.getItem("tapshield_auth_session") : null;
+      let emailParam = "";
+      if (authUserEmail) {
+        emailParam = `?email=${encodeURIComponent(authUserEmail)}`;
+      } else if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (parsed?.email) emailParam = `?email=${encodeURIComponent(parsed.email)}`;
+        } catch {}
+      }
+      const res = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/feedbacks${emailParam}`);
       if (res.ok && active) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {

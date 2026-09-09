@@ -50,6 +50,7 @@ import {
   triggerStripeSubscriptionCheckout,
   isProAccountEmail,
   checkAccountProStatus,
+  getCanonicalUidForEmail,
 } from "../lib/auth-service";
 import type { Business, FeedbackItem, AuthUserProfile } from "../types";
 import { WeeklyAnalyticsChart } from "./WeeklyAnalyticsChart";
@@ -90,10 +91,12 @@ export function GatedDashboard({
     );
   }
 
-  // Determine current effective business ID: real authenticated user uses their user ID, demo uses demo-cafe
+  // Determine current effective business ID: real authenticated user uses their canonical user ID, demo uses demo-cafe
   const isDemoAccount = Boolean(currentUser?.isDemo || currentUser?.uid === "demo-cafe");
   const effectiveBusinessId =
-    currentUser && !currentUser.isDemo ? currentUser.uid : "demo-cafe";
+    currentUser && !currentUser.isDemo
+      ? getCanonicalUidForEmail(currentUser.email, currentUser.uid)
+      : "demo-cafe";
 
   const [businessId, setBusinessId] = useState<string>(effectiveBusinessId);
   const [business, setBusiness] = useState<Business | null>(null);
@@ -148,6 +151,7 @@ export function GatedDashboard({
           biz = {
             id: effectiveBusinessId,
             ownerUid: currentUser?.uid || `owner_${effectiveBusinessId}`,
+            ownerEmail: currentUser?.email || undefined,
             businessName: currentUser?.displayName || "My Store",
             googleMapsReviewUrl: "",
             googleReviewUrl: "",
@@ -169,21 +173,24 @@ export function GatedDashboard({
           } catch {}
         }
 
+        const targetBizId = biz.id || effectiveBusinessId;
+
         if (isMounted) {
           setBusiness(biz);
+          setBusinessId(targetBizId);
           setGoogleMapsUrl(biz.googleMapsReviewUrl || "");
           setBusinessName(biz.businessName || "My Store");
 
           // The customer view data shouldn't count till they get the subscription
           const hasActiveSub = biz.subscriptionStatus === "active" || accountIsPro;
           if (!hasActiveSub && !isDemoAccount) {
-            saveCachedFeedbacks(effectiveBusinessId, []);
+            saveCachedFeedbacks(targetBizId, []);
             setFeedbacks([]);
           }
         }
 
         // Always subscribe to feedbacks for the effective business
-        unsubscribeFeedbacks = subscribeToFeedbacks(effectiveBusinessId, (data) => {
+        unsubscribeFeedbacks = subscribeToFeedbacks(targetBizId, (data) => {
           if (isMounted) {
             setFeedbacks(data);
           }
@@ -262,7 +269,7 @@ export function GatedDashboard({
         updatedAt: new Date().toISOString(),
       };
       setBusiness(updated);
-      await saveBusinessProfile(updated);
+      await saveBusinessProfile(updated, currentUser?.email || undefined);
 
       const session = await createEmbeddedCheckoutSession({
         businessId: effectiveBusinessId,
@@ -309,7 +316,7 @@ export function GatedDashboard({
         businessName: businessName.trim(),
         googleMapsReviewUrl: googleMapsUrl.trim(),
       };
-      await saveBusinessProfile(updated);
+      await saveBusinessProfile(updated, currentUser?.email || undefined);
       setBusiness(updated);
       setSaveSuccessMessage("Google Maps Review URL and business profile saved to Firestore!");
       setTimeout(() => setSaveSuccessMessage(null), 4000);

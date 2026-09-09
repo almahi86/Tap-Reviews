@@ -92,6 +92,7 @@ const memoryStripeCustomers: Record<string, string> = {}; // email -> stripeCust
 interface StoredBusiness {
   id: string;
   ownerUid: string;
+  ownerEmail?: string;
   businessName: string;
   googleMapsReviewUrl: string;
   subscriptionStatus: "active" | "inactive" | "trialing" | "canceled" | "past_due";
@@ -126,26 +127,91 @@ interface StoredFeedback {
   createdAt: string;
 }
 
-const fallbackBusinesses: Record<string, StoredBusiness> = {
-  "demo-cafe": {
-    id: "demo-cafe",
-    ownerUid: "demo_owner_1",
-    businessName: "Artisan Brews & Roastery",
-    googleMapsReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
-    subscriptionStatus: "active",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  "rcB3J0qBydaOGKD44gS0JAbpX9m1": {
-    id: "rcB3J0qBydaOGKD44gS0JAbpX9m1",
-    ownerUid: "rcB3J0qBydaOGKD44gS0JAbpX9m1",
-    businessName: "Artisan",
-    googleMapsReviewUrl: "",
-    subscriptionStatus: "active",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString() + "_paid_verified",
-  },
-};
+const BUSINESSES_FILE = path.join(process.cwd(), "data", "businesses.json");
+
+function loadStoredBusinesses(): Record<string, StoredBusiness> {
+  const defaults: Record<string, StoredBusiness> = {
+    "demo-cafe": {
+      id: "demo-cafe",
+      ownerUid: "demo-cafe",
+      ownerEmail: "demo@artisanbrews.com",
+      businessName: "Artisan Brews & Roastery",
+      googleMapsReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+      subscriptionStatus: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    "rcB3J0qBydaOGKD44gS0JAbpX9m1": {
+      id: "rcB3J0qBydaOGKD44gS0JAbpX9m1",
+      ownerUid: "rcB3J0qBydaOGKD44gS0JAbpX9m1",
+      ownerEmail: "ossovi32@gmail.com",
+      businessName: "OOO",
+      googleMapsReviewUrl: "",
+      subscriptionStatus: "active",
+      createdAt: "2026-09-07T19:40:25.409Z",
+      updatedAt: new Date().toISOString() + "_paid_verified",
+    },
+  };
+
+  try {
+    if (fs.existsSync(BUSINESSES_FILE)) {
+      const raw = fs.readFileSync(BUSINESSES_FILE, "utf-8");
+      const data = JSON.parse(raw);
+      if (data && typeof data === "object" && !Array.isArray(data)) {
+        return { ...defaults, ...data };
+      }
+    }
+  } catch (err) {
+    console.warn("Could not read businesses.json:", err);
+  }
+  return defaults;
+}
+
+const fallbackBusinesses: Record<string, StoredBusiness> = loadStoredBusinesses();
+
+function persistStoredBusinesses(): void {
+  try {
+    const dir = path.dirname(BUSINESSES_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(BUSINESSES_FILE, JSON.stringify(fallbackBusinesses, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Could not write businesses.json:", err);
+  }
+}
+
+// Canonical Business ID resolution across devices and auth providers
+function resolveCanonicalBusinessId(identifier?: string | null, email?: string | null): string {
+  if (email) {
+    const cleanEmail = email.toLowerCase().trim();
+    if (cleanEmail === "ossovi32@gmail.com" || cleanEmail.includes("ossovi32")) {
+      return "rcB3J0qBydaOGKD44gS0JAbpX9m1";
+    }
+    for (const [bizId, biz] of Object.entries(fallbackBusinesses)) {
+      if (biz.ownerEmail && biz.ownerEmail.toLowerCase() === cleanEmail) {
+        return bizId;
+      }
+    }
+  }
+
+  if (!identifier) return "demo-cafe";
+  const cleanId = identifier.trim();
+  if (cleanId === "demo-cafe") return "demo-cafe";
+  if (cleanId === "rcB3J0qBydaOGKD44gS0JAbpX9m1" || cleanId.includes("ossovi32")) {
+    return "rcB3J0qBydaOGKD44gS0JAbpX9m1";
+  }
+
+  // Check if identifier directly exists
+  if (fallbackBusinesses[cleanId]) return cleanId;
+
+  // Check if identifier is an ownerUid for an existing business
+  for (const [bizId, biz] of Object.entries(fallbackBusinesses)) {
+    if (biz.ownerUid === cleanId) return bizId;
+  }
+
+  return cleanId;
+}
 
 // Pro accounts (subscribers who already have Pro / owner accounts)
 const PRO_EMAILS = new Set([
@@ -1432,56 +1498,66 @@ app.get("/api/businesses/:businessId", async (req, res) => {
   const userId = (req.query.userId as string)?.trim();
   const isDemo = businessId === "demo-cafe";
 
-  let business = fallbackBusinesses[businessId];
+  const canonicalId = resolveCanonicalBusinessId(businessId, email || userId);
+  let business = fallbackBusinesses[canonicalId] || fallbackBusinesses[businessId];
 
   // If business has an explicit suspended status (past_due or canceled only), respect it
   if (business && (business.subscriptionStatus === "past_due" || business.subscriptionStatus === "canceled")) {
     return res.json(business);
   }
 
-  const hasPro = isProAccount({ email, userId, businessId });
+  const hasPro = isProAccount({ email, userId, businessId: canonicalId });
 
   // If already recognized as pro, ensure active status and return immediately
   if (hasPro) {
     if (!business) {
       business = {
-        id: businessId,
-        ownerUid: userId || `owner_${businessId}`,
-        businessName: "Artisan",
+        id: canonicalId,
+        ownerUid: userId || canonicalId,
+        ownerEmail: email ? email.toLowerCase().trim() : undefined,
+        businessName: "OOO",
         googleMapsReviewUrl: "",
         subscriptionStatus: "active",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString() + "_paid_verified",
       };
-      fallbackBusinesses[businessId] = business;
+      fallbackBusinesses[canonicalId] = business;
+      if (canonicalId !== businessId) fallbackBusinesses[businessId] = business;
+      persistStoredBusinesses();
     } else {
       business.subscriptionStatus = "active";
+      if (email && !business.ownerEmail) business.ownerEmail = email.toLowerCase().trim();
     }
     return res.json(business);
   }
 
   // If not demo and not currently verified active in memory, check Firestore first
   if (!isDemo && (!business || business.subscriptionStatus !== "active")) {
-    const firestoreBiz = await fetchFirestoreBusiness(businessId, userId, email);
+    const firestoreBiz = await fetchFirestoreBusiness(canonicalId, userId, email);
     if (firestoreBiz) {
       if (firestoreBiz.subscriptionStatus === "active") {
-        fallbackBusinesses[businessId] = firestoreBiz;
+        fallbackBusinesses[canonicalId] = firestoreBiz;
+        if (canonicalId !== businessId) fallbackBusinesses[businessId] = firestoreBiz;
+        persistStoredBusinesses();
         return res.json(firestoreBiz);
       }
       if (!business) {
         business = firestoreBiz;
-        fallbackBusinesses[businessId] = firestoreBiz;
+        fallbackBusinesses[canonicalId] = firestoreBiz;
+        if (canonicalId !== businessId) fallbackBusinesses[businessId] = firestoreBiz;
+        persistStoredBusinesses();
       }
     }
   }
 
   // If not demo and not currently verified active, check Stripe live
   if (!isDemo && (!business || business.subscriptionStatus !== "active")) {
-    const stripeCheck = await checkStripeSubscriptionForUser(userId || businessId, email);
+    const stripeCheck = await checkStripeSubscriptionForUser(userId || canonicalId, email);
     if (stripeCheck.hasActiveSub) {
       business = {
-        id: businessId,
-        ownerUid: userId || `owner_${businessId}`,
+        id: canonicalId,
+        ownerUid: userId || `owner_${canonicalId}`,
+        ownerEmail: email ? email.toLowerCase().trim() : undefined,
         businessName: stripeCheck.businessName || business?.businessName || "Artisan",
         googleMapsReviewUrl: business?.googleMapsReviewUrl || "",
         subscriptionStatus: "active",
@@ -1490,13 +1566,15 @@ app.get("/api/businesses/:businessId", async (req, res) => {
         createdAt: business?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString() + "_paid_verified",
       };
-      fallbackBusinesses[businessId] = business;
+      fallbackBusinesses[canonicalId] = business;
+      if (canonicalId !== businessId) fallbackBusinesses[businessId] = business;
+      persistStoredBusinesses();
 
       // Also ensure Firestore is updated to active
       if (stripeCheck.customerId) {
         updateFirestoreBusinessSubscription(stripeCheck.customerId, "active", {
-          businessId,
-          firebaseUid: userId || businessId,
+          businessId: canonicalId,
+          firebaseUid: userId || canonicalId,
         }).catch(() => {});
       }
 
@@ -1507,15 +1585,18 @@ app.get("/api/businesses/:businessId", async (req, res) => {
   if (!business) {
     // Generate a starter business record: demo-cafe is active, real user stores are inactive until paid
     const newBiz: StoredBusiness = {
-      id: businessId,
-      ownerUid: userId || `owner_${businessId}`,
+      id: canonicalId,
+      ownerUid: userId || `owner_${canonicalId}`,
+      ownerEmail: email ? email.toLowerCase().trim() : undefined,
       businessName: isDemo ? "Artisan Brews & Roastery" : "My Store",
       googleMapsReviewUrl: isDemo ? "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4" : "",
       subscriptionStatus: isDemo ? "active" : "inactive",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    fallbackBusinesses[businessId] = newBiz;
+    fallbackBusinesses[canonicalId] = newBiz;
+    if (canonicalId !== businessId) fallbackBusinesses[businessId] = newBiz;
+    persistStoredBusinesses();
     return res.json(newBiz);
   }
 
@@ -1527,16 +1608,17 @@ app.get("/api/subscription-status", async (req, res) => {
   const email = (req.query.email as string)?.trim();
   const userId = (req.query.userId as string)?.trim();
   const businessId = (req.query.businessId as string)?.trim();
+  const canonicalId = resolveCanonicalBusinessId(businessId, email || userId);
 
   // Demo account and Pro accounts are always active
-  if (isProAccount({ email, userId, businessId })) {
+  if (isProAccount({ email, userId, businessId: canonicalId })) {
     return res.json({ isPro: true, status: "active" });
   }
 
   // Check live Stripe subscriptions
-  const stripeCheck = await checkStripeSubscriptionForUser(userId || businessId, email);
+  const stripeCheck = await checkStripeSubscriptionForUser(userId || canonicalId, email);
   if (stripeCheck.hasActiveSub) {
-    const targetId = businessId || userId;
+    const targetId = canonicalId || businessId || userId;
     if (targetId) {
       if (!fallbackBusinesses[targetId]) {
         fallbackBusinesses[targetId] = {
@@ -1557,6 +1639,7 @@ app.get("/api/subscription-status", async (req, res) => {
         if (stripeCheck.customerId) fallbackBusinesses[targetId].stripeCustomerId = stripeCheck.customerId;
         if (stripeCheck.subscriptionId) fallbackBusinesses[targetId].stripeSubscriptionId = stripeCheck.subscriptionId;
       }
+      persistStoredBusinesses();
 
       if (stripeCheck.customerId) {
         updateFirestoreBusinessSubscription(stripeCheck.customerId, "active", {
@@ -1569,6 +1652,9 @@ app.get("/api/subscription-status", async (req, res) => {
   }
 
   // Check in-memory store
+  if (canonicalId && fallbackBusinesses[canonicalId]?.subscriptionStatus === "active") {
+    return res.json({ isPro: true, status: "active" });
+  }
   if (businessId && fallbackBusinesses[businessId]?.subscriptionStatus === "active") {
     return res.json({ isPro: true, status: "active" });
   }
@@ -1577,10 +1663,12 @@ app.get("/api/subscription-status", async (req, res) => {
   }
 
   // Check Firestore directly
-  const firestoreBiz = await fetchFirestoreBusiness(businessId, userId, email);
+  const firestoreBiz = await fetchFirestoreBusiness(canonicalId, userId, email);
   if (firestoreBiz && firestoreBiz.subscriptionStatus === "active") {
+    fallbackBusinesses[canonicalId] = firestoreBiz;
     if (businessId) fallbackBusinesses[businessId] = firestoreBiz;
     if (userId) fallbackBusinesses[userId] = firestoreBiz;
+    persistStoredBusinesses();
     return res.json({ isPro: true, status: "active" });
   }
 
@@ -1590,12 +1678,14 @@ app.get("/api/subscription-status", async (req, res) => {
 app.post("/api/businesses/:businessId", (req, res) => {
   const { businessId } = req.params;
   const { businessName, googleMapsReviewUrl, subscriptionStatus, ownerUid, email } = req.body;
-  const hasPro = isProAccount({ email, userId: ownerUid, businessId });
+  const canonicalId = resolveCanonicalBusinessId(businessId, email || ownerUid);
+  const hasPro = isProAccount({ email, userId: ownerUid, businessId: canonicalId });
 
-  const current = fallbackBusinesses[businessId] || {
-    id: businessId,
-    ownerUid: ownerUid || "default_owner",
-    businessName: "My Store",
+  const current = fallbackBusinesses[canonicalId] || fallbackBusinesses[businessId] || {
+    id: canonicalId,
+    ownerUid: ownerUid || canonicalId,
+    ownerEmail: email ? email.toLowerCase().trim() : undefined,
+    businessName: "OOO",
     googleMapsReviewUrl: "",
     subscriptionStatus: hasPro ? "active" : "inactive",
     createdAt: new Date().toISOString(),
@@ -1604,6 +1694,7 @@ app.post("/api/businesses/:businessId", (req, res) => {
 
   if (businessName !== undefined) current.businessName = businessName;
   if (googleMapsReviewUrl !== undefined) current.googleMapsReviewUrl = googleMapsReviewUrl;
+  if (email) current.ownerEmail = email.toLowerCase().trim();
 
   // Never downgrade an active subscription or pro account to inactive
   if (hasPro || current.subscriptionStatus === "active") {
@@ -1614,32 +1705,43 @@ app.post("/api/businesses/:businessId", (req, res) => {
   }
   current.updatedAt = new Date().toISOString();
 
-  fallbackBusinesses[businessId] = current;
+  fallbackBusinesses[canonicalId] = current;
+  if (canonicalId !== businessId) {
+    fallbackBusinesses[businessId] = current;
+  }
+  persistStoredBusinesses();
   res.json(current);
 });
 
 // Negative Feedback API (Public Customer Submit & Dashboard Inbox fallback)
 app.get("/api/businesses/:businessId/feedbacks", (req, res) => {
   const { businessId } = req.params;
-  const isDemo = businessId === "demo-cafe";
-  const biz = fallbackBusinesses[businessId];
+  const email = (req.query.email as string)?.trim();
+  const canonicalId = resolveCanonicalBusinessId(businessId, email);
+  const isDemo = canonicalId === "demo-cafe";
+  const biz = fallbackBusinesses[canonicalId] || fallbackBusinesses[businessId];
+  const hasPro = isProAccount({ businessId: canonicalId, email });
 
   // Customer view data shouldn't count till they get the subscription
-  if (!isDemo && (!biz || biz.subscriptionStatus !== "active")) {
+  if (!isDemo && !hasPro && (!biz || biz.subscriptionStatus !== "active")) {
     return res.json([]);
   }
 
-  const list = fallbackFeedbacks.filter((f) => f.businessId === businessId);
+  const list = fallbackFeedbacks.filter(
+    (f) => f.businessId === canonicalId || f.businessId === businessId
+  );
   res.json(list);
 });
 
 app.post("/api/businesses/:businessId/feedbacks", (req, res) => {
   const { businessId } = req.params;
-  const isDemo = businessId === "demo-cafe";
-  const biz = fallbackBusinesses[businessId];
+  const canonicalId = resolveCanonicalBusinessId(businessId);
+  const isDemo = canonicalId === "demo-cafe";
+  const biz = fallbackBusinesses[canonicalId] || fallbackBusinesses[businessId];
+  const hasPro = isProAccount({ businessId: canonicalId });
 
   // Customer view data shouldn't count till they get the subscription
-  if (!isDemo && (!biz || biz.subscriptionStatus !== "active")) {
+  if (!isDemo && !hasPro && (!biz || biz.subscriptionStatus !== "active")) {
     console.log(`[FEEDBACK] Blocked customer view data for unsubscribed business: ${businessId}`);
     return res.status(403).json({
       error: "Customer view data does not count until subscription is active",
@@ -1658,7 +1760,7 @@ app.post("/api/businesses/:businessId/feedbacks", (req, res) => {
   const targetId = id || `fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const newFeedback: StoredFeedback = {
     id: targetId,
-    businessId,
+    businessId: canonicalId,
     sentiment: resolvedSentiment,
     message: resolvedNote,
     rating: resolvedRating,

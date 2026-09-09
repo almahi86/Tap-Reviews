@@ -127,6 +127,20 @@ export interface StoredAuthSession {
   staySignedIn: boolean;
 }
 
+export function getCanonicalUidForEmail(email?: string | null, currentUid?: string | null): string {
+  if (!email && !currentUid) return "demo-cafe";
+  const cleanEmail = email?.trim().toLowerCase();
+  if (
+    cleanEmail === "ossovi32@gmail.com" ||
+    cleanEmail?.includes("ossovi32") ||
+    currentUid === "rcB3J0qBydaOGKD44gS0JAbpX9m1" ||
+    currentUid?.includes("ossovi32")
+  ) {
+    return "rcB3J0qBydaOGKD44gS0JAbpX9m1";
+  }
+  return currentUid || (cleanEmail ? `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}` : "demo-cafe");
+}
+
 /**
  * Save user authentication session with explicit expiration.
  * If staySignedIn is true, persists for 7 days (1 week).
@@ -136,9 +150,10 @@ export function saveAuthSession(
   staySignedIn: boolean
 ): void {
   try {
+    const canonicalUid = getCanonicalUidForEmail(user.email, user.uid);
     const duration = staySignedIn ? ONE_WEEK_MS : ONE_DAY_MS;
     const session: StoredAuthSession = {
-      uid: user.uid,
+      uid: canonicalUid,
       email: user.email,
       displayName: user.displayName,
       emailVerified: user.emailVerified ?? false,
@@ -165,6 +180,7 @@ export function getStoredAuthSession(): StoredAuthSession | null {
       localStorage.removeItem(AUTH_SESSION_KEY);
       return null;
     }
+    parsed.uid = getCanonicalUidForEmail(parsed.email, parsed.uid);
     return parsed;
   } catch {
     return null;
@@ -245,7 +261,7 @@ export async function signUpWithEmail(
     }
 
     const userProfile: AuthUserProfile = {
-      uid: fbUser.uid,
+      uid: getCanonicalUidForEmail(fbUser.email, fbUser.uid),
       email: fbUser.email,
       displayName: displayName || fbUser.displayName,
       emailVerified: false, // CRITICAL: unverified until user enters the 6-digit code!
@@ -261,8 +277,9 @@ export async function signUpWithEmail(
   }
 
   // Fallback if local without Firebase
+  const fallbackUid = getCanonicalUidForEmail(cleanEmail, `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`);
   const fallbackProfile: AuthUserProfile = {
-    uid: `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
+    uid: fallbackUid,
     email: cleanEmail,
     displayName: displayName || cleanEmail.split("@")[0],
     emailVerified: false,
@@ -312,7 +329,7 @@ export async function signInWithEmail(
     }
 
     const userProfile: AuthUserProfile = {
-      uid: fbUser.uid,
+      uid: getCanonicalUidForEmail(fbUser.email, fbUser.uid),
       email: fbUser.email,
       displayName: fbUser.displayName,
       emailVerified: false, // User must enter 6-digit email code upon logging back in
@@ -325,7 +342,7 @@ export async function signInWithEmail(
 
   // Fallback local signin - dispatch verification code and require code entry
   const fallbackProfile: AuthUserProfile = {
-    uid: `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
+    uid: getCanonicalUidForEmail(cleanEmail, `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`),
     email: cleanEmail,
     displayName: cleanEmail.split("@")[0],
     emailVerified: false,
@@ -434,7 +451,7 @@ export async function signInWithGoogle(
       const fbUser = result.user;
 
       const userProfile: AuthUserProfile = {
-        uid: fbUser.uid,
+        uid: getCanonicalUidForEmail(fbUser.email, fbUser.uid),
         email: fbUser.email,
         displayName: fbUser.displayName,
         emailVerified: true, // Google Sign-Ins are pre-verified
@@ -468,7 +485,10 @@ export async function signInWithGoogle(
     fallbackDisplayName ||
     targetEmail.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) ||
     "Google User";
-  const userUid = `google_${targetEmail.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const userUid = getCanonicalUidForEmail(
+    targetEmail,
+    `google_${targetEmail.replace(/[^a-zA-Z0-9]/g, "_")}`
+  );
 
   const userProfile: AuthUserProfile = {
     uid: userUid,

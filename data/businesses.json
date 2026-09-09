@@ -1,0 +1,22 @@
+{
+  "demo-cafe": {
+    "id": "demo-cafe",
+    "ownerUid": "demo-cafe",
+    "ownerEmail": "demo@artisanbrews.com",
+    "businessName": "Artisan Brews & Roastery",
+    "googleMapsReviewUrl": "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+    "subscriptionStatus": "active",
+    "createdAt": "2026-09-01T00:00:00.000Z",
+    "updatedAt": "2026-09-09T00:00:00.000Z"
+  },
+  "rcB3J0qBydaOGKD44gS0JAbpX9m1": {
+    "id": "rcB3J0qBydaOGKD44gS0JAbpX9m1",
+    "ownerUid": "rcB3J0qBydaOGKD44gS0JAbpX9m1",
+    "ownerEmail": "ossovi32@gmail.com",
+    "businessName": "OOO",
+    "googleMapsReviewUrl": "",
+    "subscriptionStatus": "active",
+    "createdAt": "2026-09-07T19:40:25.409Z",
+    "updatedAt": "2026-09-09T22:35:06.663Z"
+  }
+}

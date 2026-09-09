@@ -19,6 +19,7 @@ import {
   clearAuthSession,
   isProAccountEmail,
   checkAccountProStatus,
+  getCanonicalUidForEmail,
 } from "./lib/auth-service";
 import type { AuthUserProfile, Business } from "./types";
 import { onAuthStateChanged } from "firebase/auth";
@@ -139,7 +140,8 @@ export default function App() {
           setIsSubscriptionModalOpen(false);
         }
 
-        const biz = await fetchBusiness(activeBusinessId, currentUser.email);
+        const canonicalId = getCanonicalUidForEmail(currentUser.email, activeBusinessId);
+        const biz = await fetchBusiness(canonicalId, currentUser.email);
         if (biz?.id && biz.id !== activeBusinessId) {
           setActiveBusinessId(biz.id);
         }
@@ -152,7 +154,7 @@ export default function App() {
         // Also check live Stripe subscription directly if not marked active yet
         if (!active && currentUser) {
           try {
-            const isPro = await checkAccountProStatus(currentUser.uid, currentUser.email);
+            const isPro = await checkAccountProStatus(canonicalId, currentUser.email);
             if (isPro) {
               active = true;
             }
@@ -188,15 +190,16 @@ export default function App() {
   useEffect(() => {
     const session = getStoredAuthSession();
     if (session && Date.now() <= session.expiresAt && session.uid) {
+      const canonicalUid = getCanonicalUidForEmail(session.email, session.uid);
       const restoredUser: AuthUserProfile = {
-        uid: session.uid,
+        uid: canonicalUid,
         email: session.email,
         displayName: session.displayName,
         emailVerified: session.emailVerified ?? false,
         isDemo: false,
       };
       setCurrentUser(restoredUser);
-      setActiveBusinessId(session.uid);
+      setActiveBusinessId(canonicalUid);
     }
   }, []);
 
@@ -240,8 +243,9 @@ export default function App() {
             }
           }
 
+          const canonicalUid = getCanonicalUidForEmail(user.email, user.uid);
           const profile: AuthUserProfile = {
-            uid: user.uid,
+            uid: canonicalUid,
             email: user.email,
             displayName: user.displayName,
             emailVerified: verified,
@@ -254,20 +258,21 @@ export default function App() {
           }
 
           setCurrentUser(profile);
-          setActiveBusinessId(user.uid);
+          setActiveBusinessId(canonicalUid);
         } else {
           // Check if we have an active valid stored session (e.g. Google preview auth)
           const session = getStoredAuthSession();
           if (session && Date.now() <= session.expiresAt && session.uid) {
+            const canonicalUid = getCanonicalUidForEmail(session.email, session.uid);
             const restoredUser: AuthUserProfile = {
-              uid: session.uid,
+              uid: canonicalUid,
               email: session.email,
               displayName: session.displayName,
               emailVerified: session.emailVerified ?? false,
               isDemo: false,
             };
             setCurrentUser(restoredUser);
-            setActiveBusinessId(session.uid);
+            setActiveBusinessId(canonicalUid);
           } else {
             clearAuthSession();
             setCurrentUser(null);
@@ -618,13 +623,15 @@ export default function App() {
           setCurrentUser(user);
           setActiveBusinessId(user.uid);
 
+          const canonicalUid = getCanonicalUidForEmail(user.email, user.uid);
+          user.uid = canonicalUid;
           // Check if this user account has Pro or an active subscription
-          const isUserPro = isProAccountEmail(user.email) || (await checkAccountProStatus(user.uid, user.email));
+          const isUserPro = isProAccountEmail(user.email) || (await checkAccountProStatus(canonicalUid, user.email));
 
           // Fetch existing business profile FIRST to identify existing business and subscription status
           let existingBiz: Business | null = null;
           try {
-            existingBiz = await fetchBusiness(user.uid, user.email || undefined);
+            existingBiz = await fetchBusiness(canonicalUid, user.email || undefined);
           } catch {}
 
           const hasActiveSubscription =
@@ -632,9 +639,8 @@ export default function App() {
             existingBiz?.subscriptionStatus === "active" ||
             (existingBiz as any)?.isPro === true;
 
-          if (existingBiz?.id) {
-            setActiveBusinessId(existingBiz.id);
-          }
+          const resolvedBizId = existingBiz?.id || canonicalUid;
+          setActiveBusinessId(resolvedBizId);
           if (existingBiz?.businessName) {
             setCurrentBusinessName(existingBiz.businessName);
           } else if (businessName) {
@@ -645,7 +651,7 @@ export default function App() {
           if (businessName && (!existingBiz || existingBiz.businessName !== businessName)) {
             try {
               await saveBusinessProfile({
-                id: existingBiz?.id || user.uid,
+                id: resolvedBizId,
                 businessName,
                 subscriptionStatus: hasActiveSubscription ? "active" : (existingBiz?.subscriptionStatus || "inactive"),
               });
@@ -675,13 +681,14 @@ export default function App() {
         initialBusinessName={currentBusinessName}
         onConfirmSubscription={handleConfirmSubscription}
         onAuthSuccess={async (user, businessName) => {
+          const canonicalUid = getCanonicalUidForEmail(user.email, user.uid);
+          user.uid = canonicalUid;
           setCurrentUser(user);
-          setActiveBusinessId(user.uid);
 
-          const isUserPro = isProAccountEmail(user.email) || (await checkAccountProStatus(user.uid, user.email));
+          const isUserPro = isProAccountEmail(user.email) || (await checkAccountProStatus(canonicalUid, user.email));
           let existingBiz: Business | null = null;
           try {
-            existingBiz = await fetchBusiness(user.uid, user.email || undefined);
+            existingBiz = await fetchBusiness(canonicalUid, user.email || undefined);
           } catch {}
 
           const hasActive =
@@ -689,9 +696,8 @@ export default function App() {
             existingBiz?.subscriptionStatus === "active" ||
             (existingBiz as any)?.isPro === true;
 
-          if (existingBiz?.id) {
-            setActiveBusinessId(existingBiz.id);
-          }
+          const resolvedBizId = existingBiz?.id || canonicalUid;
+          setActiveBusinessId(resolvedBizId);
           if (existingBiz?.businessName) {
             setCurrentBusinessName(existingBiz.businessName);
           } else if (businessName) {

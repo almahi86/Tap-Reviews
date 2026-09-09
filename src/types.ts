@@ -1,6 +1,7 @@
 export interface Business {
   id: string;
   ownerUid: string;
+  ownerEmail?: string;
   businessName: string;
   googleMapsReviewUrl: string;
   googleReviewUrl?: string;

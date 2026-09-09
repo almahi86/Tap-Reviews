@@ -113,7 +113,7 @@ export function SubscriptionModal({
     setIsSubmitting(true);
 
     try {
-      const user = await signInWithGoogle(staySignedIn, currentUser?.email || "ossovi32@gmail.com");
+      const user = await signInWithGoogle(staySignedIn, currentUser?.email || undefined);
       onAuthSuccess(user, trimmedName);
       await onConfirmSubscription({
         businessName: trimmedName,

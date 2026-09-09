@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import cors from "cors";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import dotenv from "dotenv";
@@ -181,13 +182,87 @@ function persistStoredBusinesses(): void {
   }
 }
 
+// ----------------------------------------------------
+// Traditional User Accounts Database (Users Table / File)
+// ----------------------------------------------------
+export interface StoredUserAccount {
+  id: string; // unique user ID
+  email: string; // normalized lower-case email
+  salt: string; // 32-char hex random salt
+  passwordHash: string; // pbkdf2Sync hash
+  displayName?: string;
+  businessId: string;
+  businessName?: string;
+  subscriptionStatus?: "active" | "inactive" | "trialing" | "canceled" | "past_due";
+  createdAt: string;
+  updatedAt: string;
+}
+
+const USERS_FILE = path.join(process.cwd(), "data", "users.json");
+
+function loadStoredUsers(): Record<string, StoredUserAccount> {
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const raw = fs.readFileSync(USERS_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn("Could not read users.json:", err);
+  }
+  return {};
+}
+
+let storedUsers: Record<string, StoredUserAccount> = loadStoredUsers();
+
+function persistStoredUsers(): void {
+  try {
+    const dir = path.dirname(USERS_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(USERS_FILE, JSON.stringify(storedUsers, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Could not write users.json:", err);
+  }
+}
+
+function hashPassword(password: string, salt: string): string {
+  return crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
+}
+
+function verifyPassword(password: string, salt: string, expectedHash: string): boolean {
+  if (!expectedHash) return false;
+  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(expectedHash, "hex"));
+  } catch {
+    return false;
+  }
+}
+
+function findUserByEmail(email: string): StoredUserAccount | null {
+  const clean = email.toLowerCase().trim();
+  for (const user of Object.values(storedUsers)) {
+    if (user.email && user.email.toLowerCase().trim() === clean) {
+      return user;
+    }
+  }
+  return null;
+}
+
 // Canonical Business ID resolution across devices and auth providers
 function resolveCanonicalBusinessId(identifier?: string | null, email?: string | null): string {
   if (email) {
     const cleanEmail = email.toLowerCase().trim();
-    if (cleanEmail === "ossovi32@gmail.com" || cleanEmail.includes("ossovi32")) {
-      return "rcB3J0qBydaOGKD44gS0JAbpX9m1";
+    // 1. Check user accounts database
+    const user = findUserByEmail(cleanEmail);
+    if (user?.businessId) {
+      return user.businessId;
     }
+    // 2. Check businesses table by ownerEmail
     for (const [bizId, biz] of Object.entries(fallbackBusinesses)) {
       if (biz.ownerEmail && biz.ownerEmail.toLowerCase() === cleanEmail) {
         return bizId;
@@ -198,16 +273,18 @@ function resolveCanonicalBusinessId(identifier?: string | null, email?: string |
   if (!identifier) return "demo-cafe";
   const cleanId = identifier.trim();
   if (cleanId === "demo-cafe") return "demo-cafe";
-  if (cleanId === "rcB3J0qBydaOGKD44gS0JAbpX9m1" || cleanId.includes("ossovi32")) {
-    return "rcB3J0qBydaOGKD44gS0JAbpX9m1";
-  }
 
-  // Check if identifier directly exists
+  // Check if identifier directly matches a business ID
   if (fallbackBusinesses[cleanId]) return cleanId;
 
   // Check if identifier is an ownerUid for an existing business
   for (const [bizId, biz] of Object.entries(fallbackBusinesses)) {
     if (biz.ownerUid === cleanId) return bizId;
+  }
+
+  // Check if identifier is a user ID in storedUsers
+  if (storedUsers[cleanId]?.businessId) {
+    return storedUsers[cleanId].businessId;
   }
 
   return cleanId;
@@ -886,6 +963,234 @@ app.get("/api/health", (_req, res) => {
     hasSmtpConfig: Boolean(process.env.SMTP_USER && process.env.SMTP_PASS),
     timestamp: new Date().toISOString(),
   });
+});
+
+// ----------------------------------------------------
+// Traditional Registration and Login API (Users Database)
+// ----------------------------------------------------
+
+// 1. Traditional Register (Sign Up): creates record in users database
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const { email, password, businessName, displayName } = req.body;
+    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+      return res.status(400).json({ error: "Email and password are required." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    if (!cleanEmail.includes("@") || !cleanEmail.includes(".")) {
+      return res.status(400).json({ error: "Please enter a valid email address." });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters long." });
+    }
+
+    // Refresh stored users from disk in case updated elsewhere
+    storedUsers = loadStoredUsers();
+
+    const existingUser = findUserByEmail(cleanEmail);
+    if (existingUser && existingUser.passwordHash) {
+      return res.status(409).json({
+        error: "An account with this email already exists. Please log in.",
+      });
+    }
+
+    // Hash password with cryptographically secure random salt
+    const salt = crypto.randomBytes(16).toString("hex");
+    const passwordHash = hashPassword(password, salt);
+
+    // Look for existing business matching this email
+    let matchedBizId: string | null = null;
+    for (const [bizId, biz] of Object.entries(fallbackBusinesses)) {
+      if (biz.ownerEmail && biz.ownerEmail.toLowerCase().trim() === cleanEmail) {
+        matchedBizId = bizId;
+        break;
+      }
+    }
+
+    const userId = existingUser?.id || `usr_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    const resolvedBizId = matchedBizId || `biz_${userId}`;
+    const isPro = isProAccount({ email: cleanEmail, businessId: resolvedBizId, userId });
+
+    // Ensure business record exists in database
+    if (!fallbackBusinesses[resolvedBizId]) {
+      fallbackBusinesses[resolvedBizId] = {
+        id: resolvedBizId,
+        ownerUid: userId,
+        ownerEmail: cleanEmail,
+        businessName: businessName?.trim() || "My Store",
+        googleMapsReviewUrl: "",
+        subscriptionStatus: isPro ? "active" : "inactive",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      persistStoredBusinesses();
+    } else if (businessName && businessName.trim() && fallbackBusinesses[resolvedBizId].businessName !== businessName.trim()) {
+      fallbackBusinesses[resolvedBizId].businessName = businessName.trim();
+      fallbackBusinesses[resolvedBizId].updatedAt = new Date().toISOString();
+      persistStoredBusinesses();
+    }
+
+    const currentBiz = fallbackBusinesses[resolvedBizId];
+    const userRecord: StoredUserAccount = {
+      id: userId,
+      email: cleanEmail,
+      salt,
+      passwordHash,
+      displayName: displayName?.trim() || businessName?.trim() || cleanEmail.split("@")[0],
+      businessId: resolvedBizId,
+      businessName: currentBiz?.businessName || businessName?.trim() || "My Store",
+      subscriptionStatus: currentBiz?.subscriptionStatus || (isPro ? "active" : "inactive"),
+      createdAt: existingUser?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    storedUsers[userId] = userRecord;
+    persistStoredUsers();
+
+    console.log(`[AUTH] Traditional registration successful for: ${cleanEmail} (uid: ${userId}, biz: ${resolvedBizId})`);
+
+    return res.status(201).json({
+      success: true,
+      user: {
+        uid: userId,
+        email: cleanEmail,
+        displayName: userRecord.displayName,
+        businessId: resolvedBizId,
+        businessName: userRecord.businessName,
+        subscriptionStatus: userRecord.subscriptionStatus,
+        emailVerified: true,
+      },
+    });
+  } catch (err: any) {
+    console.error("[AUTH] Registration error:", err);
+    return res.status(500).json({ error: "Failed to register account. Please try again." });
+  }
+});
+
+// 2. Traditional Login (Sign In): checks credentials against users database
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+      return res.status(400).json({ error: "Email and password are required." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+
+    // Reload stored users from disk
+    storedUsers = loadStoredUsers();
+    const user = findUserByEmail(cleanEmail);
+
+    if (!user) {
+      // Check if this is an existing business in fallbackBusinesses without user password initialized yet
+      let matchedBizId: string | null = null;
+      for (const [bizId, biz] of Object.entries(fallbackBusinesses)) {
+        if (biz.ownerEmail && biz.ownerEmail.toLowerCase().trim() === cleanEmail) {
+          matchedBizId = bizId;
+          break;
+        }
+      }
+
+      if (matchedBizId) {
+        // Pre-existing business owner logging in: set their password now
+        const salt = crypto.randomBytes(16).toString("hex");
+        const passwordHash = hashPassword(password, salt);
+        const userId = fallbackBusinesses[matchedBizId].ownerUid || `usr_${Date.now()}`;
+        const isPro = isProAccount({ email: cleanEmail, businessId: matchedBizId, userId });
+
+        const newUser: StoredUserAccount = {
+          id: userId,
+          email: cleanEmail,
+          salt,
+          passwordHash,
+          displayName: cleanEmail.split("@")[0],
+          businessId: matchedBizId,
+          businessName: fallbackBusinesses[matchedBizId].businessName,
+          subscriptionStatus: fallbackBusinesses[matchedBizId].subscriptionStatus || (isPro ? "active" : "inactive"),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        storedUsers[userId] = newUser;
+        persistStoredUsers();
+        console.log(`[AUTH] Registered password for existing account on login: ${cleanEmail}`);
+
+        return res.json({
+          success: true,
+          user: {
+            uid: userId,
+            email: cleanEmail,
+            displayName: newUser.displayName,
+            businessId: matchedBizId,
+            businessName: newUser.businessName,
+            subscriptionStatus: newUser.subscriptionStatus,
+            emailVerified: true,
+          },
+        });
+      }
+
+      return res.status(401).json({
+        error: "No account found with this email. Please check your email or create an account.",
+      });
+    }
+
+    // User exists. If passwordHash was empty (pre-seeded), set password now
+    if (!user.passwordHash) {
+      user.salt = crypto.randomBytes(16).toString("hex");
+      user.passwordHash = hashPassword(password, user.salt);
+      user.updatedAt = new Date().toISOString();
+      persistStoredUsers();
+    } else {
+      // Verify password against stored hash
+      const isValid = verifyPassword(password, user.salt, user.passwordHash);
+      if (!isValid) {
+        return res.status(401).json({
+          error: "Incorrect password. Please try again.",
+        });
+      }
+    }
+
+    // Refresh business status
+    const biz = fallbackBusinesses[user.businessId];
+    const isPro = isProAccount({ email: user.email, businessId: user.businessId, userId: user.id });
+    const subscriptionStatus = biz?.subscriptionStatus || (isPro ? "active" : (user.subscriptionStatus || "inactive"));
+
+    console.log(`[AUTH] Traditional login successful for: ${cleanEmail} (uid: ${user.id}, biz: ${user.businessId})`);
+
+    return res.json({
+      success: true,
+      user: {
+        uid: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        businessId: user.businessId,
+        businessName: biz?.businessName || user.businessName || "My Store",
+        subscriptionStatus,
+        emailVerified: true,
+      },
+    });
+  } catch (err: any) {
+    console.error("[AUTH] Login error:", err);
+    return res.status(500).json({ error: "Login failed. Please try again." });
+  }
+});
+
+// 3. Check if email exists in database
+app.get("/api/auth/check-email", (req, res) => {
+  const email = (req.query.email as string)?.toLowerCase().trim();
+  if (!email) {
+    return res.status(400).json({ error: "Email query param required" });
+  }
+  storedUsers = loadStoredUsers();
+  const exists = Boolean(findUserByEmail(email));
+  return res.json({ exists });
+});
+
+// 4. Logout endpoint
+app.post("/api/auth/logout", (_req, res) => {
+  return res.json({ success: true, message: "Logged out successfully" });
 });
 
 // 1. Generate and send verification email from noreply@tapshield.space (with one-click link & 6-digit OTP code)

@@ -252,9 +252,11 @@ export default function App() {
             isDemo: false,
           };
 
-          // If no stored session, initialize 7-day session by default
+          // If no stored session exists in storage, user is signed out or visited anew
           if (!session) {
-            saveAuthSession(profile, true);
+            console.log("[AUTH] No local active session found. User is logged out.");
+            setCurrentUser(null);
+            return;
           }
 
           setCurrentUser(profile);

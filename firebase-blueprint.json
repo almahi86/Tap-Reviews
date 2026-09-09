@@ -143,9 +143,50 @@
         }
       },
       "required": ["email", "code", "expiresAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Registered user account record with email, displayName, businessId, and timestamps.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique user ID"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "User email address"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "User display or personal name"
+        },
+        "businessId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Associated business identifier"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Registration timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last updated timestamp"
+        }
+      },
+      "required": ["uid", "email", "businessId", "createdAt"]
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User account document visible only to the authenticated user themselves."
+    },
     "/businesses/{businessId}": {
       "schema": "Business",
       "description": "Stores business profile, subscription status, and Google Maps URL."

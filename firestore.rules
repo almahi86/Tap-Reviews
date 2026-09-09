@@ -19,9 +19,6 @@ service cloud.firestore {
         request.auth.uid == businessId ||
         businessId == 'biz_' + request.auth.uid ||
         businessId == 'demo-cafe' ||
-        businessId == 'rcB3J0qBydaOGKD44gS0JAbpX9m1' ||
-        request.auth.uid == 'rcB3J0qBydaOGKD44gS0JAbpX9m1' ||
-        (request.auth.token.email != null && (request.auth.token.email == 'ossovi32@gmail.com' || request.auth.token.email.matches('.*ossovi32.*'))) ||
         (resource != null && 'ownerUid' in resource.data && resource.data.ownerUid == request.auth.uid) ||
         (resource != null && 'ownerEmail' in resource.data && request.auth.token.email != null && resource.data.ownerEmail == request.auth.token.email)
       );
@@ -78,6 +75,13 @@ service cloud.firestore {
 
         allow update, delete: if isBusinessOwner(businessId) || (businessId == 'demo-cafe' && isSignedIn());
       }
+    }
+
+    // User accounts collection
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || (request.auth.token.email != null && resource.data.email == request.auth.token.email));
+      allow create, update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if isSignedIn() && request.auth.uid == userId;
     }
 
     // Temporary 6-digit OTP verification codes - accessible solely via server-side Admin SDK / Cloud Functions

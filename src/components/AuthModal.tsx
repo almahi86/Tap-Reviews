@@ -83,7 +83,7 @@ export function AuthModal({
     try {
       const user = await signInWithGoogle(
         staySignedIn,
-        email.trim() || "ossovi32@gmail.com",
+        email.trim() || undefined,
         displayName.trim() || undefined
       );
       onAuthSuccess(user, businessName.trim() || undefined);

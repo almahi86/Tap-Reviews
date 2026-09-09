@@ -49,6 +49,7 @@ export function LandingPage({
 }: LandingPageProps) {
   const [billingCycle, setBillingCycle] = useState<"month" | "year">("year");
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<"signin" | "signup">("signin");
 
   return (
     <div id="landing-page" className="min-h-screen bg-[#0A0A0A] text-white selection:bg-emerald-500 selection:text-black">
@@ -129,17 +130,24 @@ export function LandingPage({
               <div className="flex items-center gap-2">
                 <button
                   id="btn-open-login"
-                  onClick={() => setShowLoginModal(true)}
-                  className="px-3.5 py-2 rounded-lg border border-white/20 text-stone-300 hover:text-white hover:border-white/40 font-mono text-xs uppercase tracking-wider transition cursor-pointer"
+                  onClick={() => {
+                    setAuthModalMode("signin");
+                    setShowLoginModal(true);
+                  }}
+                  className="px-3 py-2 rounded-lg border border-white/20 text-stone-300 hover:text-white hover:border-white/40 font-mono text-xs uppercase tracking-wider transition cursor-pointer"
                 >
                   Log In
                 </button>
-                <a
-                  href="#pricing"
-                  className="px-4 py-2 rounded-lg bg-emerald-500 text-black font-black uppercase text-xs tracking-wider hover:bg-emerald-400 transition cursor-pointer shadow"
+                <button
+                  id="btn-open-register"
+                  onClick={() => {
+                    setAuthModalMode("signup");
+                    setShowLoginModal(true);
+                  }}
+                  className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider transition cursor-pointer shadow"
                 >
-                  Get Started
-                </a>
+                  Register
+                </button>
               </div>
             )}
           </div>
@@ -198,7 +206,10 @@ export function LandingPage({
                 <div className="pt-2 flex items-center gap-2 text-xs font-mono text-stone-400">
                   <span>Already have an account?</span>
                   <button
-                    onClick={() => setShowLoginModal(true)}
+                    onClick={() => {
+                      setAuthModalMode("signin");
+                      setShowLoginModal(true);
+                    }}
                     className="text-emerald-400 hover:text-emerald-300 font-bold uppercase tracking-wider underline cursor-pointer"
                   >
                     Sign in to Dashboard →
@@ -788,15 +799,11 @@ export function LandingPage({
       {/* Senior Firebase Auth Modal */}
       <AuthModal
         isOpen={showLoginModal}
+        defaultMode={authModalMode}
         onClose={() => setShowLoginModal(false)}
         onAuthSuccess={(user) => {
           onUserAuthChange(user);
-          // Direct user to pay first if they do not yet have an active subscription
-          if (!isSubscribed) {
-            onSubscribe(billingCycle);
-          } else {
-            onEnterDashboard();
-          }
+          onEnterDashboard();
         }}
       />
     </div>

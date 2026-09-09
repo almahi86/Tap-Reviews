@@ -1,0 +1,14 @@
+{
+  "rcB3J0qBydaOGKD44gS0JAbpX9m1": {
+    "id": "rcB3J0qBydaOGKD44gS0JAbpX9m1",
+    "email": "ossovi32@gmail.com",
+    "salt": "13f90265f1b3f4a8f1fbbc5e2e41ea64",
+    "passwordHash": "90f5a81b6f07d424e5049404a377faaa55afca3a38604e1eb43a6b530b2536d3500998c3a41646656e5fa565f2e33495acf78a8d083d9ddd0b1f3202a3aa52ec",
+    "displayName": "OOO",
+    "businessId": "rcB3J0qBydaOGKD44gS0JAbpX9m1",
+    "businessName": "OOO",
+    "subscriptionStatus": "active",
+    "createdAt": "2026-09-07T19:40:25.409Z",
+    "updatedAt": "2026-09-09T22:50:35.331Z"
+  }
+}

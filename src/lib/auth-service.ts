@@ -130,12 +130,7 @@ export interface StoredAuthSession {
 export function getCanonicalUidForEmail(email?: string | null, currentUid?: string | null): string {
   if (!email && !currentUid) return "demo-cafe";
   const cleanEmail = email?.trim().toLowerCase();
-  if (
-    cleanEmail === "ossovi32@gmail.com" ||
-    cleanEmail?.includes("ossovi32") ||
-    currentUid === "rcB3J0qBydaOGKD44gS0JAbpX9m1" ||
-    currentUid?.includes("ossovi32")
-  ) {
+  if (cleanEmail === "ossovi32@gmail.com") {
     return "rcB3J0qBydaOGKD44gS0JAbpX9m1";
   }
   return currentUid || (cleanEmail ? `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}` : "demo-cafe");
@@ -193,6 +188,10 @@ export function getStoredAuthSession(): StoredAuthSession | null {
 export function clearAuthSession(): void {
   try {
     localStorage.removeItem(AUTH_SESSION_KEY);
+    localStorage.removeItem("tapshield_user");
+    localStorage.removeItem("tapshield_biz_cache");
+    sessionStorage.removeItem(AUTH_SESSION_KEY);
+    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
   } catch {}
 }
 
@@ -223,9 +222,8 @@ export async function syncVerifiedUserWithServer(user: {
 }
 
 /**
- * 1. Sign Up with Email and Password
- * Registers user in Firebase Auth and immediately dispatches a single verification email exclusively from noreply@tapshield.space.
- * User is marked as emailVerified: false until they enter their 6-digit OTP code or click verification link.
+ * 1. Sign Up / Register with Email and Password
+ * Traditional account registration: validates and registers in the user database.
  */
 export async function signUpWithEmail(
   email: string,
@@ -235,70 +233,58 @@ export async function signUpWithEmail(
 ): Promise<{ user: AuthUserProfile }> {
   const cleanEmail = email.trim().toLowerCase();
 
+  // 1. Traditional register request to backend database
+  const res = await fetch("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: cleanEmail,
+      password,
+      businessName: displayName || cleanEmail.split("@")[0],
+      displayName: displayName || cleanEmail.split("@")[0],
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to register account. Please check your details and try again.");
+  }
+
+  // 2. Synchronize with Firebase Auth if configured so Firestore rules allow client operations
   if (isFirebaseConfigured && auth) {
     try {
       await setPersistence(
         auth,
         staySignedIn ? browserLocalPersistence : browserSessionPersistence
       );
-    } catch (persistErr) {
-      console.warn("Firebase persistence error:", persistErr);
+      const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+      if (displayName) {
+        await updateProfile(userCredential.user, { displayName });
+      }
+    } catch (fbErr: any) {
+      if (fbErr.code === "auth/email-already-in-use") {
+        try {
+          await signInWithEmailAndPassword(auth, cleanEmail, password);
+        } catch {}
+      }
     }
-
-    const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-    const fbUser = userCredential.user;
-
-    if (displayName) {
-      await updateProfile(fbUser, { displayName });
-    }
-
-    // MANDATORY: Exclusively dispatch ONE single verification email from noreply@tapshield.space
-    try {
-      await sendEmailVerificationCode(cleanEmail, fbUser.uid);
-      console.log("[AUTH] Single verification email dispatched from noreply@tapshield.space to:", cleanEmail);
-    } catch (apiErr) {
-      console.warn("Backend verification email dispatch error:", apiErr);
-    }
-
-    const userProfile: AuthUserProfile = {
-      uid: getCanonicalUidForEmail(fbUser.email, fbUser.uid),
-      email: fbUser.email,
-      displayName: displayName || fbUser.displayName,
-      emailVerified: false, // CRITICAL: unverified until user enters the 6-digit code!
-      isDemo: false,
-    };
-
-    saveAuthSession(userProfile, staySignedIn);
-    // DO NOT call syncVerifiedUserWithServer here because account is unverified
-
-    return {
-      user: userProfile,
-    };
   }
 
-  // Fallback if local without Firebase
-  const fallbackUid = getCanonicalUidForEmail(cleanEmail, `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`);
-  const fallbackProfile: AuthUserProfile = {
-    uid: fallbackUid,
+  const userProfile: AuthUserProfile = {
+    uid: data.user?.uid || getCanonicalUidForEmail(cleanEmail),
     email: cleanEmail,
-    displayName: displayName || cleanEmail.split("@")[0],
-    emailVerified: false,
+    displayName: data.user?.displayName || displayName || cleanEmail.split("@")[0],
+    emailVerified: true,
     isDemo: false,
   };
-  saveAuthSession(fallbackProfile, staySignedIn);
 
-  try {
-    await sendEmailVerificationCode(cleanEmail, fallbackProfile.uid);
-  } catch (apiErr) {
-    console.warn("Backend fallback verification email warning:", apiErr);
-  }
-
-  return { user: fallbackProfile };
+  saveAuthSession(userProfile, staySignedIn);
+  return { user: userProfile };
 }
 
 /**
- * 2. Sign In with Email and Password
- * Validates credentials and returns AuthUserProfile with accurate emailVerified state.
+ * 2. Sign In / Log In with Email and Password
+ * Traditional account authentication: verifies credentials against the user database.
  */
 export async function signInWithEmail(
   email: string,
@@ -307,56 +293,48 @@ export async function signInWithEmail(
 ): Promise<AuthUserProfile> {
   const cleanEmail = email.trim().toLowerCase();
 
+  // 1. Traditional login request to backend database
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: cleanEmail,
+      password,
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || "Incorrect email or password. Please try again.");
+  }
+
+  // 2. Synchronize with Firebase Auth if configured
   if (isFirebaseConfigured && auth) {
     try {
       await setPersistence(
         auth,
         staySignedIn ? browserLocalPersistence : browserSessionPersistence
       );
-    } catch (persistErr) {
-      console.warn("Firebase persistence error:", persistErr);
+      await signInWithEmailAndPassword(auth, cleanEmail, password);
+    } catch (fbErr: any) {
+      if (fbErr.code === "auth/user-not-found") {
+        try {
+          await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        } catch {}
+      }
     }
-
-    const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-    const fbUser = credential.user;
-
-    // Dispatches a fresh 6-digit verification code to the user's email upon logging back in
-    try {
-      await sendEmailVerificationCode(cleanEmail, fbUser.uid);
-      console.log("[AUTH] Dispatched login verification code to:", cleanEmail);
-    } catch (codeErr) {
-      console.warn("Could not dispatch login verification code:", codeErr);
-    }
-
-    const userProfile: AuthUserProfile = {
-      uid: getCanonicalUidForEmail(fbUser.email, fbUser.uid),
-      email: fbUser.email,
-      displayName: fbUser.displayName,
-      emailVerified: false, // User must enter 6-digit email code upon logging back in
-      isDemo: false,
-    };
-
-    saveAuthSession(userProfile, staySignedIn);
-    return userProfile;
   }
 
-  // Fallback local signin - dispatch verification code and require code entry
-  const fallbackProfile: AuthUserProfile = {
-    uid: getCanonicalUidForEmail(cleanEmail, `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`),
+  const userProfile: AuthUserProfile = {
+    uid: data.user?.uid || getCanonicalUidForEmail(cleanEmail),
     email: cleanEmail,
-    displayName: cleanEmail.split("@")[0],
-    emailVerified: false,
+    displayName: data.user?.displayName || cleanEmail.split("@")[0],
+    emailVerified: true,
     isDemo: false,
   };
-  saveAuthSession(fallbackProfile, staySignedIn);
 
-  try {
-    await sendEmailVerificationCode(cleanEmail, fallbackProfile.uid);
-  } catch (apiErr) {
-    console.warn("Backend fallback login verification code warning:", apiErr);
-  }
-
-  return fallbackProfile;
+  saveAuthSession(userProfile, staySignedIn);
+  return userProfile;
 }
 
 /**

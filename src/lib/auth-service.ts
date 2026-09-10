@@ -746,6 +746,17 @@ export function formatAuthError(err: any): string {
     return "This verification link is invalid or has already been used.";
   }
 
+  // HTML response / JSON syntax parse error from proxy or server reboot
+  if (
+    normalized.includes("unexpected token") ||
+    normalized.includes("not valid json") ||
+    normalized.includes("is not valid json") ||
+    normalized.includes("doctype") ||
+    normalized.includes("the page")
+  ) {
+    return "Verification service temporarily unreachable. Please check your connection and try again.";
+  }
+
   // Catch any remaining technical errors mentioning firebase or auth code syntax
   if (
     normalized.includes("firebase") ||
@@ -764,26 +775,109 @@ export function formatAuthError(err: any): string {
 }
 
 /**
+ * Safely fetches JSON, gracefully handling non-JSON responses (HTML error pages from proxies/servers)
+ */
+async function safeFetchJson<T = any>(
+  url: string,
+  options?: RequestInit
+): Promise<{ ok: boolean; status: number; data: T | null; error?: string }> {
+  try {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get("content-type") || "";
+    let data: any = null;
+
+    if (contentType.includes("application/json")) {
+      try {
+        data = await response.json();
+      } catch (jsonErr: any) {
+        console.warn(`[API] JSON parse error from ${url}:`, jsonErr);
+      }
+    } else {
+      const text = await response.text();
+      try {
+        data = JSON.parse(text);
+      } catch {
+        return {
+          ok: false,
+          status: response.status,
+          data: null,
+          error:
+            response.status === 404
+              ? "Account or endpoint not found. Please verify your email."
+              : `Server temporarily unavailable (${response.status || "network"}). Please try again.`,
+        };
+      }
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      data,
+      error: data?.error,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 0,
+      data: null,
+      error: err.message || "Network connection issue. Please check your internet connection.",
+    };
+  }
+}
+
+/**
  * Request a 6-digit password reset code sent to the user's email.
  */
-export async function requestPasswordReset(email: string): Promise<{ success: boolean; message: string; expiresAt?: string }> {
+export async function requestPasswordReset(
+  email: string
+): Promise<{ success: boolean; message: string; expiresAt?: string; devCode?: string }> {
   const cleanEmail = email.trim().toLowerCase();
   if (!cleanEmail || !cleanEmail.includes("@")) {
     throw new Error("Please enter a valid email address.");
   }
 
-  const response = await fetch("/api/auth/forgot-password", {
+  // 1. Primary: Server-side 6-digit code dispatch via Resend / SMTP
+  const res = await safeFetchJson<{
+    success: boolean;
+    message?: string;
+    expiresAt?: string;
+    devCode?: string;
+    error?: string;
+  }>("/api/auth/forgot-password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email: cleanEmail }),
   });
 
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to send reset code.");
+  if (res.ok && res.data?.success) {
+    return {
+      success: true,
+      message: res.data.message || `A 6-digit password reset code has been sent to ${cleanEmail}.`,
+      expiresAt: res.data.expiresAt,
+      devCode: res.data.devCode,
+    };
   }
 
-  return data;
+  // If server responded with an explicit operational error
+  if (res.data?.error) {
+    throw new Error(res.data.error);
+  }
+
+  // 2. Client-side fallback: Firebase Auth password reset email
+  if (isFirebaseConfigured && auth) {
+    try {
+      const { sendPasswordResetEmail } = await import("firebase/auth");
+      await sendPasswordResetEmail(auth, cleanEmail);
+      return {
+        success: true,
+        message: `A password reset link has been dispatched to ${cleanEmail}. Please check your inbox.`,
+      };
+    } catch (fbErr: any) {
+      console.warn("[AUTH] Firebase sendPasswordResetEmail fallback error:", fbErr);
+    }
+  }
+
+  throw new Error(res.error || "Unable to send password reset code. Please check your connection and try again.");
 }
 
 /**
@@ -793,18 +887,17 @@ export async function verifyPasswordResetCode(email: string, code: string): Prom
   const cleanEmail = email.trim().toLowerCase();
   const cleanCode = code.trim();
 
-  const response = await fetch("/api/auth/verify-reset-code", {
+  const res = await safeFetchJson<{ success: boolean; valid: boolean; error?: string }>("/api/auth/verify-reset-code", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email: cleanEmail, code: cleanCode }),
   });
 
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Invalid reset code.");
+  if (res.ok && res.data?.valid) {
+    return { success: true, valid: true };
   }
 
-  return data;
+  throw new Error(res.error || "Invalid 6-digit code. Please check your email.");
 }
 
 /**
@@ -826,7 +919,12 @@ export async function resetPasswordWithCode(
     throw new Error("New password must be at least 6 characters long.");
   }
 
-  const response = await fetch("/api/auth/reset-password", {
+  const res = await safeFetchJson<{
+    success: boolean;
+    message?: string;
+    user?: AuthUserProfile;
+    error?: string;
+  }>("/api/auth/reset-password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -836,12 +934,18 @@ export async function resetPasswordWithCode(
     }),
   });
 
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to reset password.");
+  if (res.ok && res.data?.success) {
+    if (res.data.user) {
+      saveAuthSession(res.data.user, true);
+    }
+    return {
+      success: true,
+      message: res.data.message || "Your password has been successfully reset.",
+      user: res.data.user,
+    };
   }
 
-  return data;
+  throw new Error(res.error || "Failed to reset password. Please try again.");
 }
 
 

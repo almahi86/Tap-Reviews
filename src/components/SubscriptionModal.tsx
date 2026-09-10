@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Building2, Check, ArrowRight, ShieldCheck, Sparkles, Store, AlertCircle } from "lucide-react";
+import { X, Building2, Check, ArrowRight, ShieldCheck, Sparkles, Store, AlertCircle, Eye, EyeOff } from "lucide-react";
 import type { AuthUserProfile } from "../types";
 import { signInWithEmail, signUpWithEmail } from "../lib/auth-service";
 
@@ -37,6 +37,8 @@ export function SubscriptionModal({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [ownerName, setOwnerName] = useState("");
   const [staySignedIn, setStaySignedIn] = useState(true);
 
@@ -313,25 +315,56 @@ export function SubscriptionModal({
                   className="w-full px-3 py-2 bg-[#121212] border border-white/20 rounded-lg text-xs font-mono text-white outline-none focus:border-emerald-500"
                 />
               </div>
-              <div>
+              <div className="relative">
                 <input
-                  type="password"
+                  id="input-subscription-password"
+                  type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Password (min 6 characters)"
-                  className="w-full px-3 py-2 bg-[#121212] border border-white/20 rounded-lg text-xs font-mono text-white outline-none focus:border-emerald-500"
+                  className="w-full px-3 pr-9 py-2 bg-[#121212] border border-white/20 rounded-lg text-xs font-mono text-white outline-none focus:border-emerald-500"
                 />
+                <button
+                  id="btn-toggle-sub-password-visibility"
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  tabIndex={-1}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-white transition cursor-pointer"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  title={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <Eye className="w-3.5 h-3.5" />
+                  )}
+                </button>
               </div>
               {authMode === "signup" && (
-                <div>
+                <div className="relative">
                   <input
                     id="input-subscription-confirm-password"
-                    type="password"
+                    type={showConfirmPassword ? "text" : "password"}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Confirm Password"
-                    className="w-full px-3 py-2 bg-[#121212] border border-white/20 rounded-lg text-xs font-mono text-white outline-none focus:border-emerald-500"
+                    className="w-full px-3 pr-9 py-2 bg-[#121212] border border-white/20 rounded-lg text-xs font-mono text-white outline-none focus:border-emerald-500"
                   />
+                  <button
+                    id="btn-toggle-sub-confirm-password-visibility"
+                    type="button"
+                    onClick={() => setShowConfirmPassword((prev) => !prev)}
+                    tabIndex={-1}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-white transition cursor-pointer"
+                    aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                    title={showConfirmPassword ? "Hide password" : "Show password"}
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
                 </div>
               )}
             </div>

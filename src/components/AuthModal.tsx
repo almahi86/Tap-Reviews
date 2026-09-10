@@ -11,6 +11,8 @@ import {
   CheckCircle2,
   ArrowLeft,
   RotateCw,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   signInWithEmail,
@@ -44,6 +46,8 @@ export function AuthModal({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [resetCode, setResetCode] = useState("");
@@ -65,6 +69,8 @@ export function AuthModal({
       setEmail("");
       setPassword("");
       setConfirmPassword("");
+      setShowPassword(false);
+      setShowConfirmPassword(false);
       setDisplayName("");
       setBusinessName("");
       setResetCode("");
@@ -667,16 +673,33 @@ export function AuthModal({
                     </button>
                   )}
                 </div>
-                <input
-                  id="input-auth-password"
-                  type="password"
-                  required
-                  minLength={6}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full px-3 py-2 rounded-xl bg-[#0A0A0A] border border-white/15 text-white text-xs placeholder:text-stone-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
-                />
+                <div className="relative">
+                  <input
+                    id="input-auth-password"
+                    type={showPassword ? "text" : "password"}
+                    required
+                    minLength={6}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3 pr-10 py-2 rounded-xl bg-[#0A0A0A] border border-white/15 text-white text-xs placeholder:text-stone-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition font-sans"
+                  />
+                  <button
+                    id="btn-toggle-password-visibility"
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    tabIndex={-1}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-white transition cursor-pointer rounded-lg hover:bg-white/5"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    title={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-4 h-4 text-emerald-400" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -689,16 +712,33 @@ export function AuthModal({
                     {mode === "reset" ? "Confirm New Password" : "Confirm Password"}
                   </span>
                 </label>
-                <input
-                  id="input-auth-confirm-password"
-                  type="password"
-                  required
-                  minLength={6}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full px-3 py-2 rounded-xl bg-[#0A0A0A] border border-white/15 text-white text-xs placeholder:text-stone-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
-                />
+                <div className="relative">
+                  <input
+                    id="input-auth-confirm-password"
+                    type={showConfirmPassword ? "text" : "password"}
+                    required
+                    minLength={6}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3 pr-10 py-2 rounded-xl bg-[#0A0A0A] border border-white/15 text-white text-xs placeholder:text-stone-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition font-sans"
+                  />
+                  <button
+                    id="btn-toggle-confirm-password-visibility"
+                    type="button"
+                    onClick={() => setShowConfirmPassword((prev) => !prev)}
+                    tabIndex={-1}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-white transition cursor-pointer rounded-lg hover:bg-white/5"
+                    aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                    title={showConfirmPassword ? "Hide password" : "Show password"}
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="w-4 h-4 text-emerald-400" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
               </div>
             )}
 

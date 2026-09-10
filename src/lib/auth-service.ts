@@ -224,13 +224,19 @@ export async function syncVerifiedUserWithServer(user: {
 /**
  * 1. Sign Up / Register with Email and Password
  * Traditional account registration: validates and registers in the user database.
+ * Dispatches 6-digit verification code to email from noreply@tapshield.space.
  */
 export async function signUpWithEmail(
   email: string,
   password: string,
   displayName?: string,
   staySignedIn: boolean = true
-): Promise<{ user: AuthUserProfile }> {
+): Promise<{
+  user: AuthUserProfile;
+  requiresVerification?: boolean;
+  message?: string;
+  devCode?: string;
+}> {
   const cleanEmail = email.trim().toLowerCase();
 
   // 1. Traditional register request to backend database
@@ -261,6 +267,8 @@ export async function signUpWithEmail(
       if (displayName) {
         await updateProfile(userCredential.user, { displayName });
       }
+      // Note: We deliberately do NOT call Firebase's sendEmailVerification to prevent
+      // a duplicate second email. The single official email is dispatched from noreply@tapshield.space.
     } catch (fbErr: any) {
       if (fbErr.code === "auth/email-already-in-use") {
         try {
@@ -270,16 +278,26 @@ export async function signUpWithEmail(
     }
   }
 
+  const isVerified = Boolean(data.user?.emailVerified);
   const userProfile: AuthUserProfile = {
     uid: data.user?.uid || getCanonicalUidForEmail(cleanEmail),
     email: cleanEmail,
     displayName: data.user?.displayName || displayName || cleanEmail.split("@")[0],
-    emailVerified: true,
+    emailVerified: isVerified,
     isDemo: false,
   };
 
-  saveAuthSession(userProfile, staySignedIn);
-  return { user: userProfile };
+  // Only persist session if already verified; unverified users must enter OTP code first
+  if (isVerified) {
+    saveAuthSession(userProfile, staySignedIn);
+  }
+
+  return {
+    user: userProfile,
+    requiresVerification: data.requiresVerification ?? !isVerified,
+    message: data.message,
+    devCode: data.devCode,
+  };
 }
 
 /**
@@ -325,11 +343,12 @@ export async function signInWithEmail(
     }
   }
 
+  const isVerified = Boolean(data.user?.emailVerified);
   const userProfile: AuthUserProfile = {
     uid: data.user?.uid || getCanonicalUidForEmail(cleanEmail),
     email: cleanEmail,
     displayName: data.user?.displayName || cleanEmail.split("@")[0],
-    emailVerified: true,
+    emailVerified: isVerified,
     isDemo: false,
   };
 
@@ -440,45 +459,16 @@ export async function signInWithGoogle(
       await syncVerifiedUserWithServer(userProfile);
       return userProfile;
     } catch (popupErr: any) {
-      console.warn("Firebase Google popup error, checking fallback:", popupErr);
-      const isDomainOrBlocked =
-        popupErr?.code === "auth/unauthorized-domain" ||
-        popupErr?.message?.includes("unauthorized-domain") ||
-        popupErr?.code === "auth/popup-blocked" ||
-        popupErr?.code === "auth/cancelled-popup-request" ||
-        popupErr?.code === "auth/popup-closed-by-user" ||
-        popupErr?.message?.includes("popup-closed-by-user");
-
-      // If not domain/popup limitation and no fallback was intended, throw
-      if (!isDomainOrBlocked && !fallbackEmail) {
-        throw popupErr;
-      }
-      // Otherwise proceed to seamlessly authenticate with Google credentials
+      console.warn("Firebase Google popup error:", popupErr);
+      throw new Error(
+        "Google sign-in was canceled or is not supported in this environment. Please log in with your email and password."
+      );
     }
   }
 
-  // Preview / Verified Google Account Authentication
-  const targetEmail = (fallbackEmail || "ossovi32@gmail.com").trim().toLowerCase();
-  const targetName =
-    fallbackDisplayName ||
-    targetEmail.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) ||
-    "Google User";
-  const userUid = getCanonicalUidForEmail(
-    targetEmail,
-    `google_${targetEmail.replace(/[^a-zA-Z0-9]/g, "_")}`
+  throw new Error(
+    "Authentication service unavailable. Please sign in using your email and password."
   );
-
-  const userProfile: AuthUserProfile = {
-    uid: userUid,
-    email: targetEmail,
-    displayName: targetName,
-    emailVerified: true,
-    isDemo: false,
-  };
-
-  saveAuthSession(userProfile, staySignedIn);
-  await syncVerifiedUserWithServer({ ...userProfile, isGoogle: true });
-  return userProfile;
 }
 
 /**
@@ -489,7 +479,7 @@ export async function verifyCodeInput(
   email: string,
   code: string,
   uid?: string
-): Promise<VerificationResult> {
+): Promise<VerificationResult & { user?: AuthUserProfile }> {
   const cleanEmail = email.trim().toLowerCase();
   const cleanCode = code.trim();
 
@@ -527,6 +517,7 @@ export async function verifyCodeInput(
   return {
     success: true,
     emailVerified: true,
+    user: data.user,
     message: data.message || "Email verified successfully.",
   };
 }
@@ -537,7 +528,7 @@ export async function verifyCodeInput(
 export async function sendEmailVerificationCode(
   email: string,
   uid?: string
-): Promise<{ success: boolean; expiresAt?: string; verificationLink?: string }> {
+): Promise<{ success: boolean; expiresAt?: string; verificationLink?: string; devCode?: string }> {
   const cleanEmail = email.trim().toLowerCase();
 
   const response = await fetch("/api/auth/send-verification-code", {
@@ -556,6 +547,7 @@ export async function sendEmailVerificationCode(
     success: true,
     expiresAt: data.expiresAt,
     verificationLink: data.verificationLink,
+    devCode: data.devCode,
   };
 }
 
@@ -770,4 +762,86 @@ export function formatAuthError(err: any): string {
 
   return "Incorrect email or password. Please check your details and try again.";
 }
+
+/**
+ * Request a 6-digit password reset code sent to the user's email.
+ */
+export async function requestPasswordReset(email: string): Promise<{ success: boolean; message: string; expiresAt?: string }> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes("@")) {
+    throw new Error("Please enter a valid email address.");
+  }
+
+  const response = await fetch("/api/auth/forgot-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: cleanEmail }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to send reset code.");
+  }
+
+  return data;
+}
+
+/**
+ * Check if the entered 6-digit code is valid.
+ */
+export async function verifyPasswordResetCode(email: string, code: string): Promise<{ success: boolean; valid: boolean }> {
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanCode = code.trim();
+
+  const response = await fetch("/api/auth/verify-reset-code", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: cleanEmail, code: cleanCode }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Invalid reset code.");
+  }
+
+  return data;
+}
+
+/**
+ * Reset password using the verified 6-digit code and new password.
+ */
+export async function resetPasswordWithCode(
+  email: string,
+  code: string,
+  newPassword: string
+): Promise<{ success: boolean; message: string; user?: AuthUserProfile }> {
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanCode = code.trim();
+
+  if (!cleanEmail || !cleanCode || !newPassword) {
+    throw new Error("All fields are required.");
+  }
+
+  if (newPassword.length < 6) {
+    throw new Error("New password must be at least 6 characters long.");
+  }
+
+  const response = await fetch("/api/auth/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: cleanEmail,
+      code: cleanCode,
+      newPassword,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to reset password.");
+  }
+
+  return data;
+}
+
 

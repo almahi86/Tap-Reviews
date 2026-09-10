@@ -61,6 +61,9 @@ function getMailTransporter(): any {
       port,
       secure: port === 465,
       auth: { user, pass },
+      connectionTimeout: 4000,
+      greetingTimeout: 4000,
+      socketTimeout: 4000,
     });
   }
 
@@ -88,6 +91,15 @@ const memoryVerificationCodes: Record<string, StoredVerificationCode> = {};
 const memoryVerificationTokens: Record<string, string> = {}; // token -> email
 const memoryVerifiedEmails: Record<string, boolean> = {};
 const memoryStripeCustomers: Record<string, string> = {}; // email -> stripeCustomerId
+
+interface StoredPasswordResetCode {
+  email: string;
+  code: string;
+  expiresAt: Date;
+  createdAt: Date;
+  attempts: number;
+}
+const memoryPasswordResetCodes: Record<string, StoredPasswordResetCode> = {};
 
 // In-memory fallback / mock store for live preview demo mode (when Firebase credentials are not yet entered)
 interface StoredBusiness {
@@ -194,8 +206,153 @@ export interface StoredUserAccount {
   businessId: string;
   businessName?: string;
   subscriptionStatus?: "active" | "inactive" | "trialing" | "canceled" | "past_due";
+  emailVerified?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+// ----------------------------------------------------
+// Reusable Verification Email & Code Generator
+// ----------------------------------------------------
+async function generateAndSendVerificationCode(
+  email: string,
+  uid?: string,
+  req?: express.Request
+): Promise<{
+  code: string;
+  token: string;
+  expiresAt: Date;
+  verificationLink: string;
+  sentSuccessfully: boolean;
+  devCode?: string;
+}> {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // Invalidate any previous verification flags so user must provide valid code
+  delete memoryVerifiedEmails[normalizedEmail];
+  if (uid) {
+    delete memoryVerifiedEmails[uid];
+  }
+
+  // Generate secure random 6-digit OTP & 32-char verification token
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const token = Math.random().toString(36).substring(2) + Date.now().toString(36) + Math.random().toString(36).substring(2);
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+  memoryVerificationCodes[normalizedEmail] = {
+    email: normalizedEmail,
+    code,
+    token,
+    uid: uid || undefined,
+    expiresAt,
+    createdAt: new Date(),
+    attempts: 0,
+    used: false,
+  };
+  memoryVerificationTokens[token] = normalizedEmail;
+
+  const hostHeader = req?.get("host") || "tapshield.space";
+  const protocol = req?.protocol === "http" && !hostHeader.includes("localhost") ? "https" : (req?.protocol || "https");
+  const baseUrl = process.env.APP_URL || `${protocol}://${hostHeader}`;
+  const verificationLink = `${baseUrl}/api/auth/verify-link?token=${encodeURIComponent(token)}&email=${encodeURIComponent(normalizedEmail)}`;
+
+  console.log(`[AUTH] Generated verification for ${normalizedEmail} (code: ${code}) from noreply@tapshield.space`);
+
+  const fromAddress = process.env.RESEND_FROM_EMAIL || `"TapShield" <noreply@tapshield.space>`;
+  const subject = `Your TapShield Verification Code`;
+  const textContent = `Welcome to TapShield!\n\nPlease verify your email address to access your store dashboard:\n${verificationLink}\n\nOr enter this 6-digit verification code: ${code}\n\nThis verification link and code expire in 15 minutes.\n\nSent from noreply@tapshield.space`;
+
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; background: #0A0A0A; color: #FFFFFF; border-radius: 16px; border: 1px solid #262626;">
+      <div style="margin-bottom: 24px;">
+        <span style="display: inline-block; background: #10B981; color: #000000; font-size: 11px; font-weight: 900; letter-spacing: 2px; padding: 4px 10px; border-radius: 6px; text-transform: uppercase;">TapShield</span>
+      </div>
+      
+      <h1 style="color: #FFFFFF; font-size: 22px; font-weight: 800; margin: 0 0 12px 0; letter-spacing: -0.02em;">Verify your email address</h1>
+      
+      <p style="color: #A3A3A3; font-size: 14px; line-height: 1.6; margin: 0 0 24px 0;">
+        Please verify your email address to activate your account and access your store dashboard.
+      </p>
+
+      <!-- One-Click Primary Button -->
+      <div style="margin: 28px 0; text-align: center;">
+        <a href="${verificationLink}" style="display: inline-block; background: #10B981; color: #000000; font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; padding: 14px 32px; border-radius: 10px; text-decoration: none; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);">
+          Verify My Account
+        </a>
+      </div>
+
+      <!-- 6-digit OTP code alternative -->
+      <div style="background: #141414; border: 1px solid #262626; border-radius: 12px; padding: 20px; text-align: center; margin: 24px 0;">
+        <p style="color: #737373; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px 0;">
+          Or enter this 6-digit code in your browser
+        </p>
+        <span style="font-size: 32px; font-weight: 800; letter-spacing: 8px; font-family: monospace; color: #10B981;">
+          ${code}
+        </span>
+        <p style="color: #737373; font-size: 11px; margin: 8px 0 0 0;">
+          Expires in <strong>15 minutes</strong>
+        </p>
+      </div>
+
+      <p style="color: #525252; font-size: 12px; line-height: 1.5; margin: 24px 0 0 0; border-top: 1px solid #1F1F1F; padding-top: 16px;">
+        Sent from <strong style="color: #737373;">noreply@tapshield.space</strong>.<br />
+        If you did not request this verification, you can safely ignore this email.
+      </p>
+    </div>
+  `;
+
+  // 1. Dispatch via Resend
+  let sentSuccessfully = false;
+  const resend = getResend();
+  if (resend) {
+    try {
+      const resendRes = await resend.emails.send({
+        from: fromAddress,
+        to: normalizedEmail,
+        subject,
+        text: textContent,
+        html: htmlContent,
+      });
+      if (resendRes && !resendRes.error) {
+        sentSuccessfully = true;
+        console.log(`[AUTH] Verification email sent via Resend to ${normalizedEmail}`);
+      } else if (resendRes?.error) {
+        console.warn("[AUTH] Resend email warning:", resendRes.error);
+      }
+    } catch (resendErr) {
+      console.warn("[AUTH] Resend dispatch error:", resendErr);
+    }
+  }
+
+  // 2. Secondary fallback via Nodemailer transporter
+  if (!sentSuccessfully) {
+    try {
+      const transporter = getMailTransporter();
+      await transporter.sendMail({
+        from: `"TapShield" <noreply@tapshield.space>`,
+        to: normalizedEmail,
+        subject,
+        text: textContent,
+        html: htmlContent,
+      });
+      sentSuccessfully = true;
+      console.log(`[AUTH] Verification email dispatched via SMTP/stream to ${normalizedEmail}`);
+    } catch (smtpErr) {
+      console.warn("[AUTH] SMTP send warning:", smtpErr);
+    }
+  }
+
+  // Provide devCode in preview environments if external email keys are absent
+  const devCode = (!process.env.RESEND_API_KEY && !process.env.SMTP_USER) ? code : undefined;
+
+  return {
+    code,
+    token,
+    expiresAt,
+    verificationLink,
+    sentSuccessfully,
+    devCode,
+  };
 }
 
 const USERS_FILE = path.join(process.cwd(), "data", "users.json");
@@ -902,6 +1059,84 @@ app.post("/api/create-customer-portal-session", async (req, res) => {
   }
 });
 
+// -----------------------------------------------------------------------------
+// Direct Cancel Subscription Endpoint
+// -----------------------------------------------------------------------------
+app.post("/api/cancel-subscription", async (req, res) => {
+  try {
+    const { businessId, email, userId } = req.body;
+    console.log(`[Cancel Subscription] Processing for business: ${businessId}, email: ${email}, userId: ${userId}`);
+
+    const stripe = getStripe();
+    let customerId = (email && memoryStripeCustomers[email.toLowerCase().trim()]) ||
+                     (businessId && fallbackBusinesses[businessId]?.stripeCustomerId);
+
+    if (stripe) {
+      if (!customerId && email) {
+        try {
+          const existingCustomers = await stripe.customers.list({ email: email.toLowerCase().trim(), limit: 1 });
+          if (existingCustomers.data.length > 0) {
+            customerId = existingCustomers.data[0].id;
+          }
+        } catch (e) {
+          console.warn("[Cancel Subscription] Error looking up Stripe customer:", e);
+        }
+      }
+
+      if (customerId) {
+        try {
+          const subs = await stripe.subscriptions.list({ customer: customerId, status: "active", limit: 5 });
+          for (const sub of subs.data) {
+            await stripe.subscriptions.cancel(sub.id);
+            console.log(`[Cancel Subscription] Canceled Stripe subscription ${sub.id}`);
+          }
+        } catch (stripeErr: any) {
+          console.warn("[Cancel Subscription] Error canceling Stripe subscription:", stripeErr.message);
+        }
+      }
+    }
+
+    // Update in-memory fallback store
+    if (businessId && fallbackBusinesses[businessId]) {
+      fallbackBusinesses[businessId].subscriptionStatus = "canceled";
+      fallbackBusinesses[businessId].updatedAt = new Date().toISOString();
+    }
+
+    // Update Firestore if available
+    if (customerId) {
+      await updateFirestoreBusinessSubscription(customerId, "canceled", {
+        businessId,
+        firebaseUid: userId,
+        email,
+      });
+    } else if (businessId) {
+      const cfg = getFirebaseConfig();
+      if (cfg.apiKey && cfg.projectId) {
+        try {
+          const patchUrl = `https://firestore.googleapis.com/v1/projects/${cfg.projectId}/databases/${cfg.firestoreDatabaseId}/documents/businesses/${businessId}?updateMask.fieldPaths=subscriptionStatus&updateMask.fieldPaths=updatedAt&key=${cfg.apiKey}`;
+          await fetch(patchUrl, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fields: {
+                subscriptionStatus: { stringValue: "canceled" },
+                updatedAt: { stringValue: new Date().toISOString() },
+              },
+            }),
+          });
+        } catch (fsErr: any) {
+          console.warn("[Cancel Subscription] Firestore patch error:", fsErr.message);
+        }
+      }
+    }
+
+    res.json({ success: true, subscriptionStatus: "canceled" });
+  } catch (err: any) {
+    console.error("[Cancel Subscription] Error handling cancel:", err);
+    res.status(500).json({ error: err.message || "Failed to cancel subscription" });
+  }
+});
+
 const FEEDBACKS_FILE = path.join(process.cwd(), "data", "feedbacks.json");
 
 function loadStoredFeedbacks(): StoredFeedback[] {
@@ -969,8 +1204,8 @@ app.get("/api/health", (_req, res) => {
 // Traditional Registration and Login API (Users Database)
 // ----------------------------------------------------
 
-// 1. Traditional Register (Sign Up): creates record in users database
-app.post("/api/auth/register", (req, res) => {
+// 1. Traditional Register (Sign Up): creates record in users database and dispatches verification code
+app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password, businessName, displayName } = req.body;
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
@@ -1013,6 +1248,13 @@ app.post("/api/auth/register", (req, res) => {
     const resolvedBizId = matchedBizId || `biz_${userId}`;
     const isPro = isProAccount({ email: cleanEmail, businessId: resolvedBizId, userId });
 
+    // Check if already pre-verified in cache or pro status
+    const alreadyVerified = Boolean(
+      memoryVerifiedEmails[cleanEmail] ||
+      (existingUser?.emailVerified) ||
+      isPro
+    );
+
     // Ensure business record exists in database
     if (!fallbackBusinesses[resolvedBizId]) {
       fallbackBusinesses[resolvedBizId] = {
@@ -1042,6 +1284,7 @@ app.post("/api/auth/register", (req, res) => {
       businessId: resolvedBizId,
       businessName: currentBiz?.businessName || businessName?.trim() || "My Store",
       subscriptionStatus: currentBiz?.subscriptionStatus || (isPro ? "active" : "inactive"),
+      emailVerified: alreadyVerified,
       createdAt: existingUser?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -1049,10 +1292,24 @@ app.post("/api/auth/register", (req, res) => {
     storedUsers[userId] = userRecord;
     persistStoredUsers();
 
-    console.log(`[AUTH] Traditional registration successful for: ${cleanEmail} (uid: ${userId}, biz: ${resolvedBizId})`);
+    console.log(`[AUTH] Traditional registration created for: ${cleanEmail} (uid: ${userId}, biz: ${resolvedBizId}, verified: ${alreadyVerified})`);
+
+    // Dispatch 6-digit verification code to email if not pre-verified
+    let verificationInfo: any = null;
+    if (!alreadyVerified) {
+      try {
+        verificationInfo = await generateAndSendVerificationCode(cleanEmail, userId, req);
+      } catch (sendErr) {
+        console.error("[AUTH] Error sending verification code on registration:", sendErr);
+      }
+    }
 
     return res.status(201).json({
       success: true,
+      requiresVerification: !alreadyVerified,
+      message: alreadyVerified
+        ? "Account registered successfully."
+        : `A 6-digit verification code has been sent to ${cleanEmail}. Please enter it to activate your account.`,
       user: {
         uid: userId,
         email: cleanEmail,
@@ -1060,8 +1317,9 @@ app.post("/api/auth/register", (req, res) => {
         businessId: resolvedBizId,
         businessName: userRecord.businessName,
         subscriptionStatus: userRecord.subscriptionStatus,
-        emailVerified: true,
+        emailVerified: alreadyVerified,
       },
+      devCode: verificationInfo?.devCode,
     });
   } catch (err: any) {
     console.error("[AUTH] Registration error:", err);
@@ -1109,6 +1367,7 @@ app.post("/api/auth/login", (req, res) => {
           businessId: matchedBizId,
           businessName: fallbackBusinesses[matchedBizId].businessName,
           subscriptionStatus: fallbackBusinesses[matchedBizId].subscriptionStatus || (isPro ? "active" : "inactive"),
+          emailVerified: Boolean(isPro || memoryVerifiedEmails[cleanEmail]),
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
@@ -1126,7 +1385,7 @@ app.post("/api/auth/login", (req, res) => {
             businessId: matchedBizId,
             businessName: newUser.businessName,
             subscriptionStatus: newUser.subscriptionStatus,
-            emailVerified: true,
+            emailVerified: Boolean(newUser.emailVerified),
           },
         });
       }
@@ -1156,8 +1415,14 @@ app.post("/api/auth/login", (req, res) => {
     const biz = fallbackBusinesses[user.businessId];
     const isPro = isProAccount({ email: user.email, businessId: user.businessId, userId: user.id });
     const subscriptionStatus = biz?.subscriptionStatus || (isPro ? "active" : (user.subscriptionStatus || "inactive"));
+    const isVerified = Boolean(
+      user.emailVerified ||
+      memoryVerifiedEmails[cleanEmail] ||
+      (user.id && memoryVerifiedEmails[user.id]) ||
+      isPro
+    );
 
-    console.log(`[AUTH] Traditional login successful for: ${cleanEmail} (uid: ${user.id}, biz: ${user.businessId})`);
+    console.log(`[AUTH] Traditional login successful for: ${cleanEmail} (uid: ${user.id}, biz: ${user.businessId}, verified: ${isVerified})`);
 
     return res.json({
       success: true,
@@ -1168,7 +1433,7 @@ app.post("/api/auth/login", (req, res) => {
         businessId: user.businessId,
         businessName: biz?.businessName || user.businessName || "My Store",
         subscriptionStatus,
-        emailVerified: true,
+        emailVerified: isVerified,
       },
     });
   } catch (err: any) {
@@ -1193,6 +1458,269 @@ app.post("/api/auth/logout", (_req, res) => {
   return res.json({ success: true, message: "Logged out successfully" });
 });
 
+// 5. Request Password Reset Code
+app.post("/api/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({ error: "A valid email address is required." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    storedUsers = loadStoredUsers();
+    const user = findUserByEmail(cleanEmail);
+
+    // Also check fallbackBusinesses for legacy/pre-seeded records
+    let hasBiz = false;
+    for (const biz of Object.values(fallbackBusinesses)) {
+      if (biz.ownerEmail && biz.ownerEmail.toLowerCase().trim() === cleanEmail) {
+        hasBiz = true;
+        break;
+      }
+    }
+
+    if (!user && !hasBiz) {
+      return res.status(404).json({
+        error: "No account found with this email. Please check your email address or sign up.",
+      });
+    }
+
+    // Generate secure 6-digit code with 15-minute expiration
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    memoryPasswordResetCodes[cleanEmail] = {
+      email: cleanEmail,
+      code,
+      expiresAt,
+      createdAt: new Date(),
+      attempts: 0,
+    };
+
+    console.log(`[AUTH] Password reset code generated for ${cleanEmail}: ${code}`);
+
+    const fromAddress = process.env.RESEND_FROM_EMAIL || `"TapShield" <noreply@tapshield.space>`;
+    const subject = `Your TapShield Password Reset Code: ${code}`;
+    const textContent = `You requested to reset your password for your TapShield account.\n\nYour 6-digit password reset code is: ${code}\n\nThis code expires in 15 minutes.\n\nIf you did not request a password reset, you can safely ignore this email.\n\nSent from noreply@tapshield.space`;
+
+    const htmlContent = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; background: #0A0A0A; color: #FFFFFF; border-radius: 16px; border: 1px solid #262626;">
+        <div style="margin-bottom: 24px;">
+          <span style="display: inline-block; background: #10B981; color: #000000; font-size: 11px; font-weight: 900; letter-spacing: 2px; padding: 4px 10px; border-radius: 6px; text-transform: uppercase;">TapShield</span>
+        </div>
+        
+        <h1 style="color: #FFFFFF; font-size: 22px; font-weight: 800; margin: 0 0 12px 0; letter-spacing: -0.02em;">Reset Your Password</h1>
+        
+        <p style="color: #A3A3A3; font-size: 14px; line-height: 1.6; margin: 0 0 24px 0;">
+          We received a request to reset the password for your TapShield store account (<strong>${cleanEmail}</strong>).
+        </p>
+
+        <!-- 6-digit OTP code box -->
+        <div style="background: #141414; border: 1px solid #262626; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
+          <p style="color: #737373; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 10px 0;">
+            Enter this 6-digit reset code in the app:
+          </p>
+          <span style="font-size: 34px; font-weight: 900; letter-spacing: 8px; font-family: monospace; color: #10B981; display: inline-block;">
+            ${code}
+          </span>
+          <p style="color: #737373; font-size: 11px; margin: 10px 0 0 0;">
+            Expires in <strong>15 minutes</strong>
+          </p>
+        </div>
+
+        <p style="color: #525252; font-size: 12px; line-height: 1.5; margin: 24px 0 0 0; border-top: 1px solid #1F1F1F; padding-top: 16px;">
+          Sent from <strong style="color: #737373;">noreply@tapshield.space</strong>.<br />
+          If you did not request this password reset, you can safely ignore this email. Your password will remain unchanged.
+        </p>
+      </div>
+    `;
+
+    let sentSuccessfully = false;
+    const resend = getResend();
+    if (resend) {
+      try {
+        const resendRes = await resend.emails.send({
+          from: fromAddress,
+          to: cleanEmail,
+          subject,
+          text: textContent,
+          html: htmlContent,
+        });
+        if (resendRes && !resendRes.error) {
+          sentSuccessfully = true;
+          console.log(`[AUTH] Password reset email sent via Resend from noreply@tapshield.space to ${cleanEmail}`);
+        }
+      } catch (resendErr) {
+        console.warn("[AUTH] Resend dispatch warning:", resendErr);
+      }
+    }
+
+    if (!sentSuccessfully) {
+      try {
+        const transporter = getMailTransporter();
+        await transporter.sendMail({
+          from: `"TapShield" <noreply@tapshield.space>`,
+          to: cleanEmail,
+          subject,
+          text: textContent,
+          html: htmlContent,
+        });
+        sentSuccessfully = true;
+        console.log(`[AUTH] Password reset email dispatched via SMTP/stream to ${cleanEmail}`);
+      } catch (smtpErr) {
+        console.warn("[AUTH] SMTP dispatch warning:", smtpErr);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `A 6-digit password reset code has been sent to ${cleanEmail}.`,
+      expiresAt: expiresAt.toISOString(),
+    });
+  } catch (err: any) {
+    console.error("[AUTH] Forgot password error:", err);
+    return res.status(500).json({ error: "Failed to process password reset request." });
+  }
+});
+
+// 6. Verify Reset Code
+app.post("/api/auth/verify-reset-code", (req, res) => {
+  try {
+    const { email, code } = req.body;
+    if (!email || !code) {
+      return res.status(400).json({ error: "Email and 6-digit code are required." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanCode = String(code).trim();
+    const resetEntry = memoryPasswordResetCodes[cleanEmail];
+
+    if (!resetEntry) {
+      return res.status(400).json({ error: "No reset code was requested for this email. Please request a new code." });
+    }
+
+    if (new Date() > resetEntry.expiresAt) {
+      delete memoryPasswordResetCodes[cleanEmail];
+      return res.status(400).json({ error: "This reset code has expired. Please request a new code." });
+    }
+
+    if (resetEntry.code !== cleanCode) {
+      resetEntry.attempts = (resetEntry.attempts || 0) + 1;
+      if (resetEntry.attempts >= 5) {
+        delete memoryPasswordResetCodes[cleanEmail];
+        return res.status(400).json({ error: "Too many failed attempts. Please request a new reset code." });
+      }
+      return res.status(400).json({ error: "Invalid 6-digit code. Please check your email." });
+    }
+
+    return res.json({ success: true, valid: true });
+  } catch (err: any) {
+    console.error("[AUTH] Verify reset code error:", err);
+    return res.status(500).json({ error: "Failed to verify reset code." });
+  }
+});
+
+// 7. Reset Password with Code
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body;
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ error: "Email, reset code, and new password are required." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanCode = String(code).trim();
+
+    if (typeof newPassword !== "string" || newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters long." });
+    }
+
+    const resetEntry = memoryPasswordResetCodes[cleanEmail];
+    if (!resetEntry) {
+      return res.status(400).json({ error: "No reset code requested for this email. Please request a new code." });
+    }
+
+    if (new Date() > resetEntry.expiresAt) {
+      delete memoryPasswordResetCodes[cleanEmail];
+      return res.status(400).json({ error: "This reset code has expired. Please request a new one." });
+    }
+
+    if (resetEntry.code !== cleanCode) {
+      resetEntry.attempts = (resetEntry.attempts || 0) + 1;
+      if (resetEntry.attempts >= 5) {
+        delete memoryPasswordResetCodes[cleanEmail];
+        return res.status(400).json({ error: "Too many failed attempts. Please request a new code." });
+      }
+      return res.status(400).json({ error: "Invalid 6-digit code. Please try again." });
+    }
+
+    // Code is valid! Update password in database
+    storedUsers = loadStoredUsers();
+    let user = findUserByEmail(cleanEmail);
+
+    if (!user) {
+      // Check fallbackBusinesses
+      let matchedBizId: string | null = null;
+      for (const [bizId, biz] of Object.entries(fallbackBusinesses)) {
+        if (biz.ownerEmail && biz.ownerEmail.toLowerCase().trim() === cleanEmail) {
+          matchedBizId = bizId;
+          break;
+        }
+      }
+
+      if (matchedBizId) {
+        const userId = fallbackBusinesses[matchedBizId].ownerUid || `usr_${Date.now()}`;
+        const salt = crypto.randomBytes(16).toString("hex");
+        const passwordHash = hashPassword(newPassword, salt);
+        user = {
+          id: userId,
+          email: cleanEmail,
+          salt,
+          passwordHash,
+          displayName: cleanEmail.split("@")[0],
+          businessId: matchedBizId,
+          businessName: fallbackBusinesses[matchedBizId].businessName,
+          subscriptionStatus: fallbackBusinesses[matchedBizId].subscriptionStatus || "active",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        storedUsers[userId] = user;
+      } else {
+        return res.status(404).json({ error: "Account not found in database." });
+      }
+    } else {
+      const salt = crypto.randomBytes(16).toString("hex");
+      const passwordHash = hashPassword(newPassword, salt);
+      user.salt = salt;
+      user.passwordHash = passwordHash;
+      user.updatedAt = new Date().toISOString();
+      storedUsers[user.id] = user;
+    }
+
+    persistStoredUsers();
+    delete memoryPasswordResetCodes[cleanEmail];
+
+    console.log(`[AUTH] Password successfully reset for: ${cleanEmail}`);
+
+    return res.json({
+      success: true,
+      message: "Your password has been successfully reset. You can now log in.",
+      user: {
+        uid: user.id,
+        email: cleanEmail,
+        displayName: user.displayName,
+        businessId: user.businessId,
+        businessName: user.businessName,
+        subscriptionStatus: user.subscriptionStatus,
+        emailVerified: true,
+      },
+    });
+  } catch (err: any) {
+    console.error("[AUTH] Reset password error:", err);
+    return res.status(500).json({ error: "Failed to reset password. Please try again." });
+  }
+});
+
 // 1. Generate and send verification email from noreply@tapshield.space (with one-click link & 6-digit OTP code)
 app.post("/api/auth/send-verification-code", async (req, res) => {
   try {
@@ -1202,126 +1730,14 @@ app.post("/api/auth/send-verification-code", async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    
-    // Explicitly invalidate any previous verification state so user MUST input code
-    delete memoryVerifiedEmails[normalizedEmail];
-    if (uid) {
-      delete memoryVerifiedEmails[uid];
-    }
-
-    // Generate secure random 6-digit OTP & 32-char verification token
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const token = (Math.random().toString(36).substring(2) + Date.now().toString(36) + Math.random().toString(36).substring(2));
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15-minute expiration
-
-    memoryVerificationCodes[normalizedEmail] = {
-      email: normalizedEmail,
-      code,
-      token,
-      uid: uid || undefined,
-      expiresAt,
-      createdAt: new Date(),
-      attempts: 0,
-      used: false,
-    };
-    memoryVerificationTokens[token] = normalizedEmail;
-
-    const hostHeader = req.get("host") || "tapshield.space";
-    const protocol = req.protocol === "http" && !hostHeader.includes("localhost") ? "https" : req.protocol;
-    const baseUrl = process.env.APP_URL || `${protocol}://${hostHeader}`;
-    const verificationLink = `${baseUrl}/api/auth/verify-link?token=${encodeURIComponent(token)}&email=${encodeURIComponent(normalizedEmail)}`;
-
-    console.log(`[AUTH] Generated verification for ${normalizedEmail} (code: ${code}) from noreply@tapshield.space`);
-
-    const fromAddress = process.env.RESEND_FROM_EMAIL || `"TapShield" <noreply@tapshield.space>`;
-    const subject = `Your TapShield Verification Code`;
-    const textContent = `Welcome to TapShield!\n\nPlease verify your email address to access your store dashboard:\n${verificationLink}\n\nOr enter this 6-digit verification code: ${code}\n\nThis verification link and code expire in 15 minutes.\n\nSent from noreply@tapshield.space`;
-
-    const htmlContent = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; background: #0A0A0A; color: #FFFFFF; border-radius: 16px; border: 1px solid #262626;">
-        <div style="margin-bottom: 24px;">
-          <span style="display: inline-block; background: #10B981; color: #000000; font-size: 11px; font-weight: 900; letter-spacing: 2px; padding: 4px 10px; border-radius: 6px; text-transform: uppercase;">TapShield</span>
-        </div>
-        
-        <h1 style="color: #FFFFFF; font-size: 22px; font-weight: 800; margin: 0 0 12px 0; letter-spacing: -0.02em;">Verify your email address</h1>
-        
-        <p style="color: #A3A3A3; font-size: 14px; line-height: 1.6; margin: 0 0 24px 0;">
-          Please verify your email address to access your store dashboard and NFC review shield.
-        </p>
-
-        <!-- One-Click Primary Button -->
-        <div style="margin: 28px 0; text-align: center;">
-          <a href="${verificationLink}" style="display: inline-block; background: #10B981; color: #000000; font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; padding: 14px 32px; border-radius: 10px; text-decoration: none; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);">
-            Verify My Account
-          </a>
-        </div>
-
-        <!-- 6-digit OTP code alternative -->
-        <div style="background: #141414; border: 1px solid #262626; border-radius: 12px; padding: 20px; text-align: center; margin: 24px 0;">
-          <p style="color: #737373; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px 0;">
-            Or enter this 6-digit code in your browser
-          </p>
-          <span style="font-size: 32px; font-weight: 800; letter-spacing: 8px; font-family: monospace; color: #10B981;">
-            ${code}
-          </span>
-          <p style="color: #737373; font-size: 11px; margin: 8px 0 0 0;">
-            Expires in <strong>15 minutes</strong>
-          </p>
-        </div>
-
-        <p style="color: #525252; font-size: 12px; line-height: 1.5; margin: 24px 0 0 0; border-top: 1px solid #1F1F1F; padding-top: 16px;">
-          Sent from <strong style="color: #737373;">noreply@tapshield.space</strong>.<br />
-          If you did not request this verification, you can safely ignore this email.
-        </p>
-      </div>
-    `;
-
-    // 1. First attempt via Resend
-    let sentSuccessfully = false;
-    const resend = getResend();
-    if (resend) {
-      try {
-        const resendRes = await resend.emails.send({
-          from: fromAddress,
-          to: normalizedEmail,
-          subject,
-          text: textContent,
-          html: htmlContent,
-        });
-        if (resendRes && !resendRes.error) {
-          sentSuccessfully = true;
-          console.log(`[AUTH] Verification email successfully dispatched via Resend from noreply@tapshield.space to ${normalizedEmail}`);
-        } else if (resendRes?.error) {
-          console.warn("[AUTH] Resend email warning:", resendRes.error);
-        }
-      } catch (resendErr) {
-        console.warn("[AUTH] Resend dispatch error:", resendErr);
-      }
-    }
-
-    // 2. Secondary fallback via Nodemailer transporter
-    if (!sentSuccessfully) {
-      try {
-        const transporter = getMailTransporter();
-        await transporter.sendMail({
-          from: `"TapShield" <noreply@tapshield.space>`,
-          to: normalizedEmail,
-          subject,
-          text: textContent,
-          html: htmlContent,
-        });
-        sentSuccessfully = true;
-        console.log(`[AUTH] Verification email dispatched via SMTP/stream from noreply@tapshield.space to ${normalizedEmail}`);
-      } catch (smtpErr) {
-        console.warn("[AUTH] SMTP send warning:", smtpErr);
-      }
-    }
+    const result = await generateAndSendVerificationCode(normalizedEmail, uid, req);
 
     res.json({
       success: true,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: result.expiresAt.toISOString(),
       message: `Verification email sent from noreply@tapshield.space to ${normalizedEmail}`,
-      verificationLink,
+      verificationLink: result.verificationLink,
+      devCode: result.devCode,
     });
   } catch (err: any) {
     console.error("Error sending verification code:", err);
@@ -1369,6 +1785,15 @@ app.get("/api/auth/verify-link", async (req, res) => {
     }
     if (token) {
       delete memoryVerificationTokens[token];
+    }
+
+    // Update persistent user database
+    storedUsers = loadStoredUsers();
+    const matchedUser = findUserByEmail(normalizedEmail) || (record.uid ? storedUsers[record.uid] : null);
+    if (matchedUser) {
+      matchedUser.emailVerified = true;
+      matchedUser.updatedAt = new Date().toISOString();
+      persistStoredUsers();
     }
 
     console.log(`[AUTH] Successfully verified ${normalizedEmail} via link from noreply@tapshield.space`);
@@ -1446,11 +1871,29 @@ app.post("/api/auth/verify-email-code", async (req, res) => {
       memoryVerifiedEmails[uid] = true;
     }
 
+    // Update persistent user database
+    storedUsers = loadStoredUsers();
+    const matchedUser = findUserByEmail(normalizedEmail) || (uid ? storedUsers[uid] : null);
+    if (matchedUser) {
+      matchedUser.emailVerified = true;
+      matchedUser.updatedAt = new Date().toISOString();
+      persistStoredUsers();
+    }
+
     console.log(`[AUTH] Successfully verified email ${normalizedEmail} (uid: ${uid || "none"})`);
 
     res.json({
       success: true,
       emailVerified: true,
+      user: matchedUser ? {
+        uid: matchedUser.id,
+        email: matchedUser.email,
+        displayName: matchedUser.displayName,
+        businessId: matchedUser.businessId,
+        businessName: matchedUser.businessName,
+        subscriptionStatus: matchedUser.subscriptionStatus,
+        emailVerified: true,
+      } : undefined,
       message: "Email successfully verified.",
     });
   } catch (err: any) {

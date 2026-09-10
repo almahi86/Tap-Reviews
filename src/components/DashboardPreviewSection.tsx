@@ -22,6 +22,7 @@ import {
   CornerDownRight,
   Mail,
   Phone,
+  Globe,
 } from "lucide-react";
 import { WeeklyAnalyticsChart } from "./WeeklyAnalyticsChart";
 import type { FeedbackItem } from "../types";
@@ -29,6 +30,8 @@ import type { FeedbackItem } from "../types";
 interface DashboardPreviewSectionProps {
   onOpenAuthModal: () => void;
   onExploreDemo?: () => void;
+  onOpenCustomerRateView?: () => void;
+  onBackToLanding?: () => void;
 }
 
 interface FixedSampleFeedback extends FeedbackItem {
@@ -138,6 +141,8 @@ const fixedSampleFeedbacks: FixedSampleFeedback[] = [
 export function DashboardPreviewSection({
   onOpenAuthModal,
   onExploreDemo,
+  onOpenCustomerRateView,
+  onBackToLanding,
 }: DashboardPreviewSectionProps) {
   const [copiedLink, setCopiedLink] = useState(false);
   const [activeFilter, setActiveFilter] = useState<"all" | "new" | "reviewed" | "resolved">("all");
@@ -163,38 +168,49 @@ export function DashboardPreviewSection({
           <div className="space-y-3 max-w-2xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono font-bold uppercase tracking-wider">
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Authentic Subscriber Dashboard Preview</span>
+              <span>Interactive Dashboard Demo (Preview Only)</span>
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-black uppercase text-white tracking-tight">
-              What Your Dashboard Actually Looks Like
+              Store Owner Dashboard Demonstration
             </h1>
 
             <p className="text-stone-300 text-xs sm:text-sm leading-relaxed">
-              When you subscribe, this is your live command center. Every widget is specifically built for your NFC review stands: live conversion metrics, weekly 5-star Google redirects, private feedback intercept inbox, and direct Google Maps configuration.
+              This is an example of the live command center for <strong className="text-white">Artisan Brews & Roastery (Demo)</strong>. Sign in or register to configure your actual Google Maps review redirection and manage real customer feedback.
             </p>
           </div>
 
           {/* Primary Action Buttons */}
-          <div className="flex flex-col sm:flex-row lg:flex-col gap-3 flex-shrink-0">
+          <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 flex-shrink-0">
             <button
               id="btn-preview-sign-in"
               onClick={onOpenAuthModal}
-              className="py-3.5 px-6 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-emerald-500/20 active:scale-98 whitespace-nowrap"
+              className="py-3 px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-emerald-500/20 active:scale-98 whitespace-nowrap"
             >
               <Lock className="w-4 h-4" />
-              <span>Sign In / Create Account</span>
+              <span>Log In / Register</span>
               <ArrowRight className="w-4 h-4" />
             </button>
 
-            {onExploreDemo && (
+            {onOpenCustomerRateView && (
               <button
-                id="btn-preview-explore-demo"
-                onClick={onExploreDemo}
-                className="py-3 px-5 rounded-xl bg-[#0A0A0A] hover:bg-white/5 border border-white/15 text-stone-200 hover:text-white font-bold uppercase text-xs tracking-wider flex items-center justify-center gap-2 transition cursor-pointer active:scale-98 whitespace-nowrap"
+                id="btn-preview-open-rate"
+                onClick={onOpenCustomerRateView}
+                className="py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white font-bold uppercase text-xs tracking-wider flex items-center justify-center gap-2 transition cursor-pointer active:scale-98 whitespace-nowrap"
               >
-                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Open Live Interactive Store</span>
+                <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Test Customer Preview</span>
+              </button>
+            )}
+
+            {onBackToLanding && (
+              <button
+                id="btn-preview-back-overview"
+                onClick={onBackToLanding}
+                className="py-2 px-4 rounded-xl bg-transparent hover:bg-white/5 text-stone-400 hover:text-white font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Back to Overview</span>
               </button>
             )}
           </div>
@@ -273,7 +289,7 @@ export function DashboardPreviewSection({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={onOpenAuthModal}
+                  onClick={onOpenCustomerRateView || onOpenAuthModal}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded text-xs font-black uppercase tracking-wider bg-emerald-500 text-black hover:bg-emerald-400 transition cursor-pointer"
                 >
                   <Smartphone className="w-4 h-4" />

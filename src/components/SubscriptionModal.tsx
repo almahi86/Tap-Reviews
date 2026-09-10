@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { X, Building2, Check, ArrowRight, ShieldCheck, Sparkles, Store, AlertCircle } from "lucide-react";
 import type { AuthUserProfile } from "../types";
-import { signInWithGoogle, signInWithEmail, signUpWithEmail } from "../lib/auth-service";
+import { signInWithEmail, signUpWithEmail } from "../lib/auth-service";
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -102,34 +102,7 @@ export function SubscriptionModal({
     }
   };
 
-  const handleGoogleAuth = async () => {
-    const trimmedName = businessName.trim();
-    if (!trimmedName) {
-      setError("Please enter your business name first.");
-      return;
-    }
 
-    setError(null);
-    setIsSubmitting(true);
-
-    try {
-      const user = await signInWithGoogle(staySignedIn, currentUser?.email || undefined);
-      onAuthSuccess(user, trimmedName);
-      await onConfirmSubscription({
-        businessName: trimmedName,
-        interval,
-      });
-      onClose();
-    } catch (err: any) {
-      console.error("Google auth during subscription error:", err);
-      setIsSubmitting(false);
-      const errorMsg = err?.message || "Failed to connect to checkout";
-      setError(errorMsg);
-      window.alert(errorMsg);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
@@ -317,40 +290,7 @@ export function SubscriptionModal({
               </div>
             </div>
 
-            {/* Quick Google Sign In */}
-            <button
-              id="btn-subscription-google-auth"
-              type="button"
-              onClick={handleGoogleAuth}
-              disabled={isSubmitting}
-              className="w-full py-2.5 px-4 rounded-xl border border-white/20 bg-[#1e1e1e] hover:bg-[#252525] text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 transition cursor-pointer disabled:opacity-50"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path
-                  fill="#EA4335"
-                  d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.1 9 5 12 5z"
-                />
-                <path
-                  fill="#4285F4"
-                  d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12 0 14.8s.7 5.1 1.9 7.5l3.7-2.9z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23.5c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.1-6.4-5.2L1.9 16.5c1.8 3.7 5.6 7 10.1 7z"
-                />
-              </svg>
-              <span>Continue with Google</span>
-            </button>
 
-            <div className="flex items-center gap-3 text-stone-500 text-[10px] font-mono uppercase">
-              <div className="h-px bg-white/10 flex-1" />
-              <span>Or email & password</span>
-              <div className="h-px bg-white/10 flex-1" />
-            </div>
 
             <div className="space-y-2.5">
               {authMode === "signup" && (

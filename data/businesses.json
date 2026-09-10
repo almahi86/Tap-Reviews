@@ -18,5 +18,59 @@
     "subscriptionStatus": "active",
     "createdAt": "2026-09-07T19:40:25.409Z",
     "updatedAt": "2026-09-09T22:35:06.663Z"
+  },
+  "biz_usr_1789054560435_43ceff02": {
+    "id": "biz_usr_1789054560435_43ceff02",
+    "ownerUid": "usr_1789054560435_43ceff02",
+    "ownerEmail": "torof18083@bowlfuel.com",
+    "businessName": "WSP",
+    "googleMapsReviewUrl": "",
+    "subscriptionStatus": "active",
+    "createdAt": "2026-09-10T15:36:00.435Z",
+    "updatedAt": "2026-09-10T15:36:00.435Z"
+  },
+  "biz_usr_1789055381229_96c642d0": {
+    "id": "biz_usr_1789055381229_96c642d0",
+    "ownerUid": "usr_1789055381229_96c642d0",
+    "ownerEmail": "jikajat843@bowlfuel.com",
+    "businessName": "www",
+    "googleMapsReviewUrl": "",
+    "subscriptionStatus": "active",
+    "createdAt": "2026-09-10T15:49:41.229Z",
+    "updatedAt": "2026-09-10T15:54:40.073Z",
+    "stripeCustomerId": "cus_VEdZB2pF8uKxbR",
+    "stripeSubscriptionId": "sub_1UEAJ2A3HbV20EtLSBsgPQN5"
+  },
+  "3kP20rM0QeU2BeNtbfjOBjB3xWN2": {
+    "id": "biz_usr_1789055381229_96c642d0",
+    "ownerUid": "usr_1789055381229_96c642d0",
+    "ownerEmail": "jikajat843@bowlfuel.com",
+    "businessName": "www",
+    "googleMapsReviewUrl": "",
+    "subscriptionStatus": "active",
+    "createdAt": "2026-09-10T15:49:41.229Z",
+    "updatedAt": "2026-09-10T15:54:40.073Z",
+    "stripeCustomerId": "cus_VEdZB2pF8uKxbR",
+    "stripeSubscriptionId": "sub_1UEAJ2A3HbV20EtLSBsgPQN5"
+  },
+  "usr_1789055381229_96c642d0": {
+    "id": "usr_1789055381229_96c642d0",
+    "ownerUid": "3kP20rM0QeU2BeNtbfjOBjB3xWN2",
+    "businessName": "www",
+    "googleMapsReviewUrl": "",
+    "subscriptionStatus": "active",
+    "stripeCustomerId": "cus_VEdZB2pF8uKxbR",
+    "stripeSubscriptionId": "sub_1UEAJ2A3HbV20EtLSBsgPQN5",
+    "createdAt": "2026-09-10T15:54:38.709Z",
+    "updatedAt": "2026-09-10T15:54:40.073Z"
+  },
+  "ossovi32@gmail.com": {
+    "id": "ossovi32@gmail.com",
+    "ownerUid": "ossovi32@gmail.com",
+    "businessName": "OOO",
+    "googleMapsReviewUrl": "",
+    "subscriptionStatus": "active",
+    "createdAt": "2026-09-10T15:59:08.163Z",
+    "updatedAt": "2026-09-10T15:59:08.163Z_paid_verified"
   }
 }

@@ -1,5 +1,18 @@
 import { useState, useEffect, type FormEvent } from "react";
-import { ThumbsUp, ThumbsDown, ExternalLink, Send, CheckCircle2, AlertCircle, Store } from "lucide-react";
+import {
+  ThumbsUp,
+  ThumbsDown,
+  ExternalLink,
+  Send,
+  CheckCircle2,
+  AlertCircle,
+  Store,
+  Globe,
+  LayoutDashboard,
+  Lock,
+  ArrowLeft,
+  RotateCcw,
+} from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { fetchBusiness, submitCustomerFeedback } from "../lib/firebase";
 import type { Business } from "../types";
@@ -7,12 +20,24 @@ import type { Business } from "../types";
 interface NfcRatingPageProps {
   businessId: string;
   isOwnerPreview?: boolean;
+  isSignedOutExample?: boolean;
+  isLiveMode?: boolean;
   onBackToDashboard?: () => void;
+  onBackToLanding?: () => void;
+  onOpenAuthModal?: () => void;
 }
 
 type RatingState = "initial" | "redirecting" | "negative_form" | "submitted" | "unavailable";
 
-export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }: NfcRatingPageProps) {
+export function NfcRatingPage({
+  businessId,
+  isOwnerPreview,
+  isSignedOutExample,
+  isLiveMode,
+  onBackToDashboard,
+  onBackToLanding,
+  onOpenAuthModal,
+}: NfcRatingPageProps) {
   const [business, setBusiness] = useState<Business | null>(null);
   const [loading, setLoading] = useState(true);
   const [state, setState] = useState<RatingState>("initial");
@@ -20,19 +45,73 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
   const [customerContact, setCustomerContact] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isTabClosedNotice, setIsTabClosedNotice] = useState(false);
+
+  const handleDoneAndCloseTab = () => {
+    // 1. Attempt standard script close
+    try {
+      window.close();
+    } catch {
+      // ignore
+    }
+
+    // 2. Attempt self-open close pattern
+    try {
+      window.open("", "_self");
+      window.close();
+    } catch {
+      // ignore
+    }
+
+    // 3. Set notice in case browser blocks programmatic tab closing
+    setIsTabClosedNotice(true);
+  };
 
   useEffect(() => {
     let isMounted = true;
     async function loadBusiness() {
+      // ONLY load demo cafe if businessId is explicitly "demo-cafe"
+      if (businessId === "demo-cafe") {
+        setBusiness({
+          id: "demo-cafe",
+          ownerUid: "demo-cafe",
+          businessName: "Artisan Brews & Roastery",
+          googleMapsReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+          googleReviewUrl: "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+          subscriptionStatus: "active",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        setState("initial");
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
         const biz = await fetchBusiness(businessId);
         if (!isMounted) return;
 
-        // If the business doesn't exist or their subscription is inactive, show fallback message unless in preview
-        if (!biz || biz.subscriptionStatus !== "active") {
-          setBusiness(
-            biz || {
+        const isSubscribedActive =
+          biz &&
+          (biz.subscriptionStatus === "active" ||
+            (biz as any).isPro === true ||
+            (biz as any).subscriptionStatus === "trialing");
+
+        if (biz && isSubscribedActive) {
+          setBusiness(biz);
+          setState("initial");
+        } else if (biz) {
+          setBusiness(biz);
+          if (isOwnerPreview) {
+            setState("initial");
+          } else {
+            setState("unavailable");
+          }
+        } else {
+          // If not found in Firestore or API, check if owner preview
+          if (isOwnerPreview) {
+            setBusiness({
               id: businessId,
               ownerUid: businessId,
               businessName: "My Store",
@@ -41,16 +120,11 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
               subscriptionStatus: "inactive",
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
-            }
-          );
-          if (isOwnerPreview) {
+            });
             setState("initial");
           } else {
             setState("unavailable");
           }
-        } else {
-          setBusiness(biz);
-          setState("initial");
         }
       } catch (err) {
         console.error("Error loading business for rating:", err);
@@ -80,7 +154,7 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
     return () => {
       isMounted = false;
     };
-  }, [businessId, isOwnerPreview]);
+  }, [businessId, isOwnerPreview, isSignedOutExample]);
 
   // Direct Google Review destination
   const reviewUrl =
@@ -169,8 +243,24 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
     }
   };
 
+  const handleReturnToLanding = () => {
+    if (onBackToLanding) {
+      onBackToLanding();
+    } else {
+      window.location.href = "/";
+    }
+  };
+
+  const handleReturnToDashboard = () => {
+    if (onBackToDashboard) {
+      onBackToDashboard();
+    } else {
+      window.location.href = "/";
+    }
+  };
+
   // Fallback View: Business doesn't exist or subscription is inactive (for public live scans)
-  if (!loading && !isOwnerPreview && (state === "unavailable" || !business || business.subscriptionStatus !== "active")) {
+  if (!loading && !isOwnerPreview && !isSignedOutExample && (state === "unavailable" || !business || business.subscriptionStatus !== "active")) {
     return (
       <main
         id="rating-unavailable"
@@ -188,6 +278,23 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
               This NFC review and rating service is currently unavailable. Please contact the business directly.
             </p>
           </div>
+
+          <div className="pt-2 flex flex-col gap-2">
+            <button
+              onClick={handleReturnToLanding}
+              className="w-full py-2.5 px-4 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <Globe className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Return to Overview</span>
+            </button>
+            <button
+              onClick={handleReturnToDashboard}
+              className="w-full py-2.5 px-4 rounded-lg bg-white/5 hover:bg-white/10 text-stone-300 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Return to Dashboard</span>
+            </button>
+          </div>
         </div>
       </main>
     );
@@ -198,23 +305,130 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
       id="standalone-rating-page"
       className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center p-4 sm:p-6 select-none font-sans antialiased selection:bg-emerald-500 selection:text-black"
     >
+      {/* Floating Discreet Dashboard Link for Authenticated Store Owners */}
+      {isOwnerPreview && onBackToDashboard && (
+        <button
+          type="button"
+          onClick={onBackToDashboard}
+          className="fixed top-3 right-3 z-50 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#161616]/90 hover:bg-[#222222] border border-white/15 text-stone-300 hover:text-white font-mono text-[11px] shadow-lg backdrop-blur-sm transition cursor-pointer"
+        >
+          <ArrowLeft className="w-3 h-3 text-emerald-400" />
+          <span>Dashboard</span>
+        </button>
+      )}
+
+      {/* Persistent Navigation Bar - ONLY shown in signed-out marketing demo cafe */}
+      {!isLiveMode && isSignedOutExample && businessId === "demo-cafe" && (
+        <div className="w-full max-w-md mb-4 flex items-center justify-between gap-2 px-1">
+          <button
+            type="button"
+            id="btn-nav-return-overview"
+            onClick={handleReturnToLanding}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#161616] hover:bg-[#222222] border border-white/15 hover:border-white/30 text-stone-200 hover:text-white font-mono text-xs uppercase tracking-wider transition cursor-pointer shadow-sm"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Back to Overview</span>
+          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              id="btn-nav-return-dashboard"
+              onClick={handleReturnToDashboard}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#161616] hover:bg-[#222222] border border-white/15 hover:border-white/30 text-stone-200 hover:text-white font-mono text-xs uppercase tracking-wider transition cursor-pointer shadow-sm"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Dashboard Demo</span>
+            </button>
+
+            {onOpenAuthModal && (
+              <button
+                type="button"
+                id="btn-nav-return-auth"
+                onClick={onOpenAuthModal}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black font-mono text-xs uppercase tracking-wider transition cursor-pointer shadow-sm"
+              >
+                <Lock className="w-3 h-3" />
+                <span>Log In</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="w-full max-w-md bg-[#141414] rounded-2xl border border-white/10 shadow-2xl p-6 sm:p-8">
-        {isOwnerPreview && (
+        {/* Signed-out Example Mode Banner - ONLY for demo cafe */}
+        {!isLiveMode && isSignedOutExample && businessId === "demo-cafe" && (
+          <div className="mb-6 p-3.5 rounded-xl bg-[#1A1A1A] border border-white/15 text-xs shadow-lg space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                  Example Preview
+                </span>
+                <span className="font-mono text-xs font-bold text-white">
+                  Customer NFC Tap View
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-stone-400">
+                Signed Out (Demo)
+              </span>
+            </div>
+
+            <p className="text-[11px] text-stone-400 leading-tight">
+              Demonstration of customer NFC tap screen. Click below to return to any other option:
+            </p>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/10">
+              {onBackToLanding && (
+                <button
+                  id="btn-preview-back-overview"
+                  onClick={onBackToLanding}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition cursor-pointer"
+                >
+                  <Globe className="w-3 h-3 text-emerald-400" />
+                  <span>Overview</span>
+                </button>
+              )}
+              {onBackToDashboard && (
+                <button
+                  id="btn-preview-back-dashboard"
+                  onClick={onBackToDashboard}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition cursor-pointer"
+                >
+                  <LayoutDashboard className="w-3 h-3 text-emerald-400" />
+                  <span>Dashboard Demo</span>
+                </button>
+              )}
+              {onOpenAuthModal && (
+                <button
+                  id="btn-preview-login-register"
+                  onClick={onOpenAuthModal}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs transition cursor-pointer ml-auto"
+                >
+                  <Lock className="w-3 h-3" />
+                  <span>Log In / Register</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Store Owner Signed-In Preview Banner - only shown when not in live mode */}
+        {!isLiveMode && isOwnerPreview && (
           <div className="mb-6 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
               <span className="font-mono text-[11px] font-bold">
-                {canCountData
-                  ? "Customer View Preview (Active Subscription)"
-                  : "Public NFC Scans Disabled (Service currently unavailable) — Subscription inactive or payment failed"}
+                Customer View Preview (Store Owner)
               </span>
             </div>
             {onBackToDashboard && (
               <button
                 onClick={onBackToDashboard}
-                className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 cursor-pointer underline"
+                className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 cursor-pointer underline flex items-center gap-1"
               >
-                Back to Dashboard
+                <ArrowLeft className="w-3 h-3" />
+                <span>Back to Dashboard</span>
               </button>
             )}
           </div>
@@ -296,6 +510,37 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
                     </div>
                   </button>
                 </div>
+
+                {/* Footer: Authentic Minimal Watermark in Live Mode vs Return Nav in Demo Cafe */}
+                {!isLiveMode && isSignedOutExample && businessId === "demo-cafe" ? (
+                  <div className="pt-4 flex flex-wrap items-center justify-center gap-2 border-t border-white/10">
+                    <button
+                      type="button"
+                      id="btn-initial-bottom-overview"
+                      onClick={handleReturnToLanding}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-stone-300 hover:text-white font-mono text-xs uppercase tracking-wider transition cursor-pointer"
+                    >
+                      <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Back to Overview</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-initial-bottom-dashboard"
+                      onClick={handleReturnToDashboard}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-stone-300 hover:text-white font-mono text-xs uppercase tracking-wider transition cursor-pointer"
+                    >
+                      <LayoutDashboard className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Back to Dashboard Demo</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="pt-4 text-center">
+                    <div className="inline-flex items-center gap-1.5 text-[10px] font-mono tracking-wider text-stone-500 uppercase">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      <span>Protected by TapShield NFC</span>
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -338,6 +583,47 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
                     <ExternalLink className="w-4 h-4" />
                   </a>
                 </div>
+
+                {/* Return to Other Options */}
+                {!isLiveMode && isSignedOutExample && businessId === "demo-cafe" ? (
+                  <div className="pt-3 flex flex-wrap items-center justify-center gap-2 border-t border-white/10">
+                    <button
+                      type="button"
+                      onClick={handleReturnToLanding}
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Globe className="w-3 h-3 text-emerald-400" />
+                      <span>Back to Overview</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleReturnToDashboard}
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <LayoutDashboard className="w-3 h-3 text-emerald-400" />
+                      <span>Back to Dashboard Demo</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setState("initial")}
+                      className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-stone-300 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Try Again</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="pt-3 flex items-center justify-center">
+                    <button
+                      type="button"
+                      onClick={() => setState("initial")}
+                      className="text-[11px] font-mono text-stone-400 hover:text-white transition cursor-pointer flex items-center gap-1"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Cancel / Go back</span>
+                    </button>
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -407,11 +693,11 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
                     </p>
                   </div>
 
-                  <div className="flex gap-3 pt-1">
+                  <div className="flex flex-wrap gap-2 pt-1">
                     <button
                       type="button"
                       onClick={() => setState("initial")}
-                      className="py-3 px-4 rounded-lg bg-transparent hover:bg-white/5 text-stone-400 hover:text-white font-black text-xs uppercase tracking-wider transition cursor-pointer border border-white/10"
+                      className="py-3 px-3.5 rounded-lg bg-transparent hover:bg-white/5 text-stone-400 hover:text-white font-black text-xs uppercase tracking-wider transition cursor-pointer border border-white/10"
                     >
                       Cancel
                     </button>
@@ -480,7 +766,64 @@ export function NfcRatingPage({ businessId, isOwnerPreview, onBackToDashboard }:
                   </p>
                 </div>
 
-                <div className="pt-2 text-center">
+                {/* Return to Other Options */}
+                {!isLiveMode && isSignedOutExample && businessId === "demo-cafe" ? (
+                  <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-2 border-t border-white/10">
+                    <button
+                      type="button"
+                      id="btn-submitted-back-overview"
+                      onClick={handleReturnToLanding}
+                      className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Back to Overview</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-submitted-back-dashboard"
+                      onClick={handleReturnToDashboard}
+                      className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <LayoutDashboard className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Back to Dashboard Demo</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-submitted-test-again"
+                      onClick={() => {
+                        setState("initial");
+                        setMessage("");
+                        setCustomerContact("");
+                      }}
+                      className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Test Again</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="pt-4 flex flex-col items-center justify-center gap-3 border-t border-white/10">
+                    <button
+                      type="button"
+                      id="btn-submitted-done"
+                      onClick={handleDoneAndCloseTab}
+                      className="px-6 py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-black text-xs uppercase tracking-wider transition cursor-pointer active:scale-95"
+                    >
+                      Done
+                    </button>
+                    {isTabClosedNotice && (
+                      <p className="text-[11px] text-stone-400 font-mono text-center">
+                        You can now safely close this tab.
+                      </p>
+                    )}
+                    <div className="inline-flex items-center gap-1.5 text-[10px] font-mono text-stone-500 uppercase tracking-widest">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      <span>Protected by TapShield NFC</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-1 text-center">
                   <a
                     href={reviewUrl}
                     target="_blank"

@@ -30,6 +30,7 @@ interface LandingPageProps {
   isSubscribed: boolean;
   onEnterDashboard: () => void;
   onOpenCustomerRateView: () => void;
+  onViewDashboardExample?: () => void;
   onUserAuthChange: (user: AuthUserProfile | null) => void;
   onSignOut?: () => void;
   onSubscribe: (interval: "month" | "year") => Promise<void>;
@@ -42,6 +43,7 @@ export function LandingPage({
   isSubscribed,
   onEnterDashboard,
   onOpenCustomerRateView,
+  onViewDashboardExample,
   onUserAuthChange,
   onSignOut,
   onSubscribe,
@@ -85,6 +87,16 @@ export function LandingPage({
             <a href="#contact" className="hover:text-emerald-400 transition">
               Contact Us
             </a>
+            {onViewDashboardExample && (
+              <button
+                type="button"
+                onClick={onViewDashboardExample}
+                className="text-stone-300 hover:text-white flex items-center gap-1 font-bold cursor-pointer"
+              >
+                <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Dashboard Demo</span>
+              </button>
+            )}
             <button
               onClick={onOpenCustomerRateView}
               className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-bold cursor-pointer"
@@ -181,20 +193,32 @@ export function LandingPage({
               </p>
 
               {/* Action Buttons */}
-              <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+              <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                 <a
                   href="#pricing"
                   id="hero-cta-pricing"
-                  className="px-7 py-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-widest transition flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/20 active:scale-98"
+                  className="px-6 py-3.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-widest transition flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/20 active:scale-98"
                 >
                   <span>View Pricing</span>
                   <ArrowRight className="w-4 h-4" />
                 </a>
 
+                {onViewDashboardExample && (
+                  <button
+                    id="hero-view-dashboard-example"
+                    type="button"
+                    onClick={onViewDashboardExample}
+                    className="px-5 py-3.5 rounded-lg bg-[#161616] hover:bg-[#202020] border border-white/20 text-white font-mono uppercase text-xs tracking-wider transition flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <BarChart3 className="w-4 h-4 text-emerald-400" />
+                    <span>Dashboard Demo</span>
+                  </button>
+                )}
+
                 <button
                   id="hero-simulate-tap"
                   onClick={onOpenCustomerRateView}
-                  className="px-6 py-4 rounded-lg bg-[#161616] hover:bg-[#202020] border border-white/20 text-white font-mono uppercase text-xs tracking-wider transition flex items-center justify-center gap-2 cursor-pointer"
+                  className="px-5 py-3.5 rounded-lg bg-[#161616] hover:bg-[#202020] border border-white/20 text-white font-mono uppercase text-xs tracking-wider transition flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Smartphone className="w-4 h-4 text-emerald-400" />
                   <span>Test Customer View</span>

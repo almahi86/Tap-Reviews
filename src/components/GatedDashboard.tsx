@@ -31,6 +31,7 @@ import {
   Settings,
   RefreshCw,
   X,
+  AlertCircle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -42,7 +43,6 @@ import {
   updateFeedbackItemStatus,
   replyToFeedbackItem,
   signOutUser,
-  signInWithGoogle,
   isFirebaseConfigured,
 } from "../lib/firebase";
 import {
@@ -418,7 +418,8 @@ export function GatedDashboard({
   };
 
   // Copy public NFC rating URL
-  const publicRatingUrl = `${window.location.origin}/rate/${effectiveBusinessId}`;
+  const liveBusinessId = business?.id || effectiveBusinessId;
+  const publicRatingUrl = `${window.location.origin}/rate/${liveBusinessId}`;
   const handleCopyLink = () => {
     navigator.clipboard.writeText(publicRatingUrl);
     setCopiedLink(true);
@@ -430,6 +431,42 @@ export function GatedDashboard({
   const [isOpeningPortal, setIsOpeningPortal] = useState(false);
   const [portalError, setPortalError] = useState<string | null>(null);
   const [portalUrl, setPortalUrl] = useState<string | null>(null);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [isCancelingDirectly, setIsCancelingDirectly] = useState(false);
+
+  const handleDirectCancelSubscription = async () => {
+    setIsCancelingDirectly(true);
+    setPortalError(null);
+    try {
+      const res = await fetch("/api/cancel-subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: effectiveBusinessId,
+          email: currentUser?.email,
+          userId: currentUser?.uid,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        if (business) {
+          const updated = { ...business, subscriptionStatus: "canceled" as const };
+          setBusiness(updated);
+          await saveBusinessProfile(updated);
+        }
+        setShowCancelConfirm(false);
+        setPortalUrl(null);
+        setSaveSuccessMessage("Subscription has been canceled.");
+        setTimeout(() => setSaveSuccessMessage(null), 6000);
+      } else {
+        setPortalError(data.error || "Unable to cancel subscription");
+      }
+    } catch (err: any) {
+      setPortalError(err.message || "Failed to cancel subscription");
+    } finally {
+      setIsCancelingDirectly(false);
+    }
+  };
 
   const handleOpenCustomerPortalOrSettings = async () => {
     setIsOpeningPortal(true);
@@ -611,13 +648,7 @@ export function GatedDashboard({
               <button
                 id="btn-sign-in"
                 onClick={() => {
-                  if (onOpenAuthModal) {
-                    onOpenAuthModal();
-                  } else {
-                    signInWithGoogle()
-                      .then((profile) => onUserAuthChange(profile))
-                      .catch((err) => console.warn("Login failed:", err));
-                  }
+                  onOpenAuthModal?.();
                 }}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider bg-white text-black hover:bg-stone-200 transition cursor-pointer"
               >
@@ -1629,62 +1660,123 @@ export function GatedDashboard({
                   )}
 
                   {portalUrl && (
-                    <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs space-y-2 text-center">
+                    <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs space-y-2 text-center">
                       <div className="flex items-center justify-center gap-1.5 font-bold text-white">
                         <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        <span>Stripe Customer Portal Link Ready</span>
+                        <span>{isSubscribed ? "Cancel Subscription Link Ready" : "Stripe Billing Portal Ready"}</span>
                       </div>
                       <p className="text-[11px] text-stone-300 leading-tight">
-                        Stripe billing portals open in a separate browser tab to keep card details secure. Click below if not opened automatically:
+                        {isSubscribed
+                          ? "Stripe billing portals open in a separate browser tab to keep card details secure. Click below if not opened automatically:"
+                          : "Stripe billing portals open in a separate browser tab to keep card details secure. Click below if not opened automatically:"}
                       </p>
                       <a
                         href={portalUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center justify-center gap-2 w-full py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs rounded-lg transition shadow-lg cursor-pointer"
+                        className={`inline-flex items-center justify-center gap-2 w-full py-3 px-4 text-white font-black uppercase text-xs rounded-lg transition shadow-lg cursor-pointer ${
+                          isSubscribed ? "bg-rose-600 hover:bg-rose-500" : "bg-emerald-500 hover:bg-emerald-400 text-black"
+                        }`}
                       >
-                        <span>Launch Stripe Customer Portal ↗</span>
+                        <span>{isSubscribed ? "Cancel Subscription ↗" : "Launch Stripe Customer Portal ↗"}</span>
                         <ExternalLink className="w-4 h-4" />
                       </a>
                     </div>
                   )}
 
-                  <div className="pt-2 flex flex-col sm:flex-row gap-2">
-                    <button
-                      type="button"
-                      id="btn-open-stripe-customer-portal"
-                      onClick={handleOpenCustomerPortalOrSettings}
-                      disabled={isOpeningPortal}
-                      className="flex-1 py-3 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-wider flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 shadow-md active:scale-98"
-                    >
-                      {isOpeningPortal ? (
-                        <>
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>Connecting to Stripe...</span>
-                        </>
-                      ) : (
-                        <>
-                          <CreditCard className="w-3.5 h-3.5" />
-                          <span>{portalUrl ? "Re-generate Portal Link" : "Open Stripe Customer Portal"}</span>
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </>
-                      )}
-                    </button>
-                    {!isSubscribed && (
+                  <div className="pt-2 flex flex-col gap-2">
+                    <div className="flex flex-col sm:flex-row gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsAccountSettingsOpen(false);
-                          handleStartStripeCheckout("month");
-                        }}
-                        className="py-3 px-4 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs uppercase tracking-wider transition cursor-pointer"
+                        id="btn-open-stripe-customer-portal"
+                        onClick={handleOpenCustomerPortalOrSettings}
+                        disabled={isOpeningPortal}
+                        className={`flex-1 py-3 px-4 rounded-lg font-black uppercase text-xs tracking-wider flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 shadow-md active:scale-98 ${
+                          isSubscribed
+                            ? "bg-rose-600 hover:bg-rose-500 text-white"
+                            : "bg-emerald-500 hover:bg-emerald-400 text-black"
+                        }`}
                       >
-                        Re-Subscribe
+                        {isOpeningPortal ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Connecting to Stripe...</span>
+                          </>
+                        ) : isSubscribed ? (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            <span>Cancel Subscription</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </>
+                        ) : (
+                          <>
+                            <CreditCard className="w-3.5 h-3.5" />
+                            <span>{portalUrl ? "Re-generate Portal Link" : "Open Stripe Customer Portal"}</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </>
+                        )}
                       </button>
+                      {!isSubscribed && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsAccountSettingsOpen(false);
+                            handleStartStripeCheckout("month");
+                          }}
+                          className="py-3 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase tracking-wider transition cursor-pointer"
+                        >
+                          Re-Subscribe
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Instant In-App Cancellation Alternative */}
+                    {isSubscribed && (
+                      <div className="pt-1">
+                        {!showCancelConfirm ? (
+                          <div className="text-center">
+                            <button
+                              type="button"
+                              onClick={() => setShowCancelConfirm(true)}
+                              className="text-[11px] font-mono text-stone-400 hover:text-rose-400 underline underline-offset-2 transition cursor-pointer"
+                            >
+                              Or cancel immediately without opening Stripe
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-500/30 text-xs space-y-2.5 text-center">
+                            <p className="text-rose-200 font-bold">
+                              Confirm immediate subscription cancellation?
+                            </p>
+                            <p className="text-[11px] text-stone-300 leading-tight">
+                              Your live NFC review routing and real-time Google Maps redirection will be stopped immediately.
+                            </p>
+                            <div className="flex items-center justify-center gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={handleDirectCancelSubscription}
+                                disabled={isCancelingDirectly}
+                                className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-black text-xs uppercase tracking-wider transition cursor-pointer disabled:opacity-50"
+                              >
+                                {isCancelingDirectly ? "Canceling..." : "Yes, Cancel Now"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setShowCancelConfirm(false)}
+                                className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-stone-300 font-bold text-xs uppercase tracking-wider transition cursor-pointer"
+                              >
+                                Keep My Plan
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                   <p className="text-[10px] text-stone-500 font-mono text-center">
-                    Secure Stripe billing portal lets you update credit card, view payment history, and manage renewals. Opens in a secure new tab.
+                    {isSubscribed
+                      ? "Cancel your subscription anytime. Opens secure Stripe cancellation portal or cancels immediately."
+                      : "Secure Stripe billing portal lets you update credit card, view payment history, and manage renewals. Opens in a secure new tab."}
                   </p>
                 </div>
 

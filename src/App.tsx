@@ -34,6 +34,7 @@ import {
   ShieldCheck,
   Mail,
   ExternalLink,
+  ArrowRight,
 } from "lucide-react";
 
 export default function App() {
@@ -61,8 +62,7 @@ export default function App() {
 
     // Stripe checkout return or explicit dashboard view
     const isSubscribedParam = searchParams.get("subscribed") === "true";
-    const viewParam = searchParams.get("view");
-    if (isSubscribedParam || viewParam === "dashboard") {
+    if (isSubscribedParam) {
       return { view: "dashboard", businessId: "demo-cafe" };
     }
 
@@ -79,6 +79,7 @@ export default function App() {
 
   // Auth modal control
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<"signin" | "signup">("signin");
 
   // Subscription modal control (prompts for business name before checkout)
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
@@ -366,16 +367,40 @@ export default function App() {
   };
 
   // Standalone Customer Rating Page (/rate/[businessId]):
-  // When an NFC card or QR code is scanned, or when opening the dedicated live card page in a new tab,
-  // display a completely isolated, distraction-free layout with NO SaaS navbar or dashboard links.
+  // When an NFC card or QR code is scanned directly via URL (e.g. /rate/xyz or ?rate=true)
   const isDirectRateRoute =
     typeof window !== "undefined" &&
     (window.location.pathname.startsWith("/rate/") ||
-      new URLSearchParams(window.location.search).has("rate") ||
-      (currentView === "rate" && !currentUser));
+      new URLSearchParams(window.location.search).has("rate"));
 
   if (isDirectRateRoute) {
-    return <NfcRatingPage businessId={activeBusinessId} isOwnerPreview={false} />;
+    const directPathMatch = typeof window !== "undefined" ? window.location.pathname.match(/^\/rate\/([^/]+)/) : null;
+    const directQueryBiz = typeof window !== "undefined" ? (new URLSearchParams(window.location.search).get("rate") || new URLSearchParams(window.location.search).get("business_id")) : null;
+    const targetBizId = directPathMatch?.[1] ? decodeURIComponent(directPathMatch[1]) : (directQueryBiz || activeBusinessId);
+
+    return (
+      <NfcRatingPage
+        businessId={targetBizId}
+        isOwnerPreview={Boolean(
+          currentUser &&
+          (currentUser.uid === targetBizId ||
+            isProAccountEmail(currentUser.email) ||
+            targetBizId.includes(currentUser.uid))
+        )}
+        isSignedOutExample={targetBizId === "demo-cafe" && !currentUser}
+        isLiveMode={true}
+        onBackToDashboard={() => {
+          window.location.href = "/";
+        }}
+        onBackToLanding={() => {
+          window.location.href = "/";
+        }}
+        onOpenAuthModal={() => {
+          setAuthModalMode("signin");
+          setIsAuthModalOpen(true);
+        }}
+      />
+    );
   }
 
   return (
@@ -406,22 +431,20 @@ export default function App() {
           </span>
         </div>
 
-        {/* View Switcher Tabs: when subscribed, only Dashboard and Customer View are shown */}
+        {/* View Switcher Tabs */}
         <div className="flex items-center gap-1 bg-[#161616] p-1 rounded-lg border border-white/10">
-          {(!currentUser || !isSubscribed) && (
-            <button
-              id="nav-tab-landing"
-              onClick={() => setCurrentView("landing")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-black uppercase tracking-wider transition cursor-pointer ${
-                currentView === "landing"
-                  ? "bg-white text-black shadow-xs font-black"
-                  : "text-stone-400 hover:text-white"
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5" />
-              <span>Overview</span>
-            </button>
-          )}
+          <button
+            id="nav-tab-landing"
+            onClick={() => setCurrentView("landing")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-black uppercase tracking-wider transition cursor-pointer ${
+              currentView === "landing"
+                ? "bg-white text-black shadow-xs font-black"
+                : "text-stone-400 hover:text-white"
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            <span>Overview</span>
+          </button>
 
           <button
             id="nav-tab-dashboard"
@@ -433,14 +456,14 @@ export default function App() {
             }`}
           >
             <LayoutDashboard className="w-3.5 h-3.5" />
-            <span>Dashboard</span>
-            {!isSubscribed && <Lock className="w-3 h-3 text-amber-400" />}
+            <span>{currentUser ? "Dashboard" : "Dashboard Demo"}</span>
+            {currentUser && !isSubscribed && <Lock className="w-3 h-3 text-amber-400" />}
           </button>
 
           <button
             id="nav-tab-rate"
             onClick={() => {
-              const bizId = currentUser ? currentUser.uid : activeBusinessId;
+              const bizId = currentUser ? currentUser.uid : "demo-cafe";
               setActiveBusinessId(bizId);
               setCurrentView("rate");
             }}
@@ -453,6 +476,11 @@ export default function App() {
           >
             <Smartphone className="w-3.5 h-3.5" />
             <span>Customer Preview</span>
+            {!currentUser && (
+              <span className="text-[9px] px-1 py-0.2 rounded bg-white/10 text-stone-300">
+                Demo
+              </span>
+            )}
           </button>
         </div>
 
@@ -487,14 +515,28 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <button
-              id="btn-nav-open-auth"
-              onClick={() => setIsAuthModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black text-[11px] uppercase tracking-wider transition cursor-pointer"
-            >
-              <User className="w-3.5 h-3.5" />
-              <span>Sign In</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                id="btn-nav-open-login"
+                onClick={() => {
+                  setAuthModalMode("signin");
+                  setIsAuthModalOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-lg border border-white/20 text-stone-300 hover:text-white hover:border-white/40 font-mono text-[11px] uppercase tracking-wider transition cursor-pointer"
+              >
+                Log In
+              </button>
+              <button
+                id="btn-nav-open-register"
+                onClick={() => {
+                  setAuthModalMode("signup");
+                  setIsAuthModalOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black text-[11px] uppercase tracking-wider transition cursor-pointer shadow-sm"
+              >
+                Register
+              </button>
+            </div>
           )}
 
           {/* Contact Support Button */}
@@ -516,8 +558,19 @@ export default function App() {
           <LandingPage
             currentUser={currentUser}
             isSubscribed={isSubscribed}
-            onEnterDashboard={() => setCurrentView("dashboard")}
-            onOpenCustomerRateView={() => setCurrentView("rate")}
+            onEnterDashboard={() => {
+              if (currentUser) {
+                setCurrentView("dashboard");
+              } else {
+                setAuthModalMode("signin");
+                setIsAuthModalOpen(true);
+              }
+            }}
+            onViewDashboardExample={() => setCurrentView("dashboard")}
+            onOpenCustomerRateView={() => {
+              setActiveBusinessId(currentUser ? currentUser.uid : "demo-cafe");
+              setCurrentView("rate");
+            }}
             onUserAuthChange={handleUserAuthChange}
             onSignOut={handleSignOut}
             onSubscribe={handleSubscribe}
@@ -526,21 +579,22 @@ export default function App() {
         )}
 
         {currentView === "dashboard" && (
-          // ACTIVE ROUTING GUARD
           !currentUser ? (
+            // Strictly an interactive example/demo for signed-out visitors
             <DashboardPreviewSection
-              onOpenAuthModal={() => setIsAuthModalOpen(true)}
-              onExploreDemo={() => {
-                const demoUser: AuthUserProfile = {
-                  uid: "demo-cafe",
-                  email: "demo@artisanbrews.com",
-                  displayName: "Artisan Brews (Demo)",
-                  emailVerified: true,
-                  isDemo: true,
-                };
-                setCurrentUser(demoUser);
-                setActiveBusinessId("demo-cafe");
+              onOpenAuthModal={() => {
+                setAuthModalMode("signin");
+                setIsAuthModalOpen(true);
               }}
+              onExploreDemo={() => {
+                setActiveBusinessId("demo-cafe");
+                setCurrentView("rate");
+              }}
+              onOpenCustomerRateView={() => {
+                setActiveBusinessId("demo-cafe");
+                setCurrentView("rate");
+              }}
+              onBackToLanding={() => setCurrentView("landing")}
             />
           ) : !currentUser.emailVerified ? (
             // User is unverified! ACTIVELY GUARD: display EmailVerificationScreen
@@ -583,9 +637,20 @@ export default function App() {
 
         {currentView === "rate" && (
           <NfcRatingPage
-            businessId={currentUser ? currentUser.uid : activeBusinessId}
+            businessId={
+              currentUser
+                ? getCanonicalUidForEmail(currentUser.email, currentUser.uid)
+                : activeBusinessId
+            }
             isOwnerPreview={Boolean(currentUser)}
+            isSignedOutExample={!currentUser && activeBusinessId === "demo-cafe"}
+            isLiveMode={isSubscribed}
             onBackToDashboard={() => setCurrentView("dashboard")}
+            onBackToLanding={() => setCurrentView("landing")}
+            onOpenAuthModal={() => {
+              setAuthModalMode("signin");
+              setIsAuthModalOpen(true);
+            }}
           />
         )}
       </main>
@@ -617,9 +682,10 @@ export default function App() {
         />
       )}
 
-      {/* Global Senior Firebase Auth Modal */}
+      {/* Global Traditional Auth Modal */}
       <AuthModal
         isOpen={isAuthModalOpen}
+        defaultMode={authModalMode}
         onClose={() => setIsAuthModalOpen(false)}
         onAuthSuccess={async (user, businessName) => {
           setCurrentUser(user);
